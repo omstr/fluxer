@@ -6,6 +6,7 @@ import {BuildEnvironmentNagbar} from '@app/features/app/components/layout/app_la
 import {ConnectionNagbar} from '@app/features/app/components/layout/app_layout/nagbars/ConnectionNagbar';
 import {CorruptedInstallationNagbar} from '@app/features/app/components/layout/app_layout/nagbars/CorruptedInstallationNagbar';
 import {DesktopDownloadNagbar} from '@app/features/app/components/layout/app_layout/nagbars/DesktopDownloadNagbar';
+import {DesktopHandoffNagbar} from '@app/features/app/components/layout/app_layout/nagbars/DesktopHandoffNagbar';
 import {DesktopNotificationNagbar} from '@app/features/app/components/layout/app_layout/nagbars/DesktopNotificationNagbar';
 import {DesktopUpdateReadyNagbar} from '@app/features/app/components/layout/app_layout/nagbars/DesktopUpdateReadyNagbar';
 import {EmailVerificationNagbar} from '@app/features/app/components/layout/app_layout/nagbars/EmailVerificationNagbar';
@@ -100,6 +101,13 @@ export const NagbarContainer: React.FC<NagbarContainerProps> = observer(({nagbar
 								key={nagbar.type}
 								isMobile={mobileLayout.enabled}
 								data-flx="app.app-layout.nagbar-container.email-verification-nagbar"
+							/>
+						);
+					case NagbarType.DESKTOP_HANDOFF:
+						return (
+							<DesktopHandoffNagbar
+								key={nagbar.type}
+								isMobile={mobileLayout.enabled}
 							/>
 						);
 					case NagbarType.DESKTOP_NOTIFICATION:

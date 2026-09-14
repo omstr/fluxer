@@ -15,6 +15,7 @@ export const NagbarType = {
 	PREMIUM_ONBOARDING: 'premium-onboarding',
 	GIFT_INVENTORY: 'gift-inventory',
 	DESKTOP_DOWNLOAD: 'desktop-download',
+	DESKTOP_HANDOFF: 'desktop-handoff',
 	DESKTOP_UPDATE_READY: 'desktop-update-ready',
 	GUILD_MEMBERSHIP_CTA: 'guild-membership-cta',
 	VISIONARY_MFA: 'visionary-mfa',
@@ -45,6 +46,7 @@ export interface NagbarConditions {
 	canShowScheduledMaintenance: boolean;
 	userIsUnclaimed: boolean;
 	userNeedsVerification: boolean;
+	canShowDesktopHandoff: boolean;
 	canShowDesktopNotification: boolean;
 	canShowPremiumGracePeriod: boolean;
 	canShowPremiumExpired: boolean;

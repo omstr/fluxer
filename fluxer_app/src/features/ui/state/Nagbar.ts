@@ -8,6 +8,7 @@ export interface NagbarSettings {
 	iosInstallDismissed: boolean;
 	pwaInstallDismissed: boolean;
 	pushNotificationDismissed: boolean;
+	desktopHandoffDismissed: boolean;
 	desktopNotificationDismissed: boolean;
 	premiumGracePeriodDismissed: boolean;
 	premiumExpiredDismissed: boolean;
@@ -33,6 +34,7 @@ export interface NagbarSettings {
 	forcePremiumOnboarding: boolean;
 	forceGiftInventory: boolean;
 	forceDesktopDownload: boolean;
+	forceDesktopHandoff: boolean;
 	forceGuildMembershipCta: boolean;
 	forceVisionaryMfa: boolean;
 	forceTermsAcceptance: boolean;
@@ -53,6 +55,7 @@ export interface NagbarSettings {
 	forceHidePremiumOnboarding: boolean;
 	forceHideGiftInventory: boolean;
 	forceHideDesktopDownload: boolean;
+	forceHideDesktopHandoff: boolean;
 	forceHideGuildMembershipCta: boolean;
 	forceHideVisionaryMfa: boolean;
 	forceHideTermsAcceptance: boolean;
@@ -79,6 +82,7 @@ export class Nagbar implements NagbarSettings {
 	premiumExpiredDismissed = false;
 	premiumOnboardingDismissed = false;
 	giftInventoryDismissed = false;
+	desktopHandoffDismissed = false;
 	desktopDownloadDismissed = false;
 	pendingBulkDeletionDismissed: Record<string, boolean> = {};
 	invitesDisabledDismissed: Record<string, boolean> = {};
@@ -101,6 +105,7 @@ export class Nagbar implements NagbarSettings {
 	forcePremiumOnboarding = false;
 	forceGiftInventory = false;
 	forceDesktopDownload = false;
+	forceDesktopHandoff = false;
 	forceGuildMembershipCta = false;
 	forceVisionaryMfa = false;
 	forceTermsAcceptance = false;
@@ -122,6 +127,7 @@ export class Nagbar implements NagbarSettings {
 	forceHidePremiumOnboarding = false;
 	forceHideGiftInventory = false;
 	forceHideDesktopDownload = false;
+	forceHideDesktopHandoff = false;
 	forceHideGuildMembershipCta = false;
 	forceHideVisionaryMfa = false;
 	forceHideTermsAcceptance = false;
@@ -144,6 +150,7 @@ export class Nagbar implements NagbarSettings {
 				'iosInstallDismissed',
 				'pwaInstallDismissed',
 				'pushNotificationDismissed',
+				'desktopHandoffDismissed',
 				'desktopNotificationDismissed',
 				'premiumGracePeriodDismissed',
 				'premiumExpiredDismissed',
@@ -160,6 +167,7 @@ export class Nagbar implements NagbarSettings {
 				iosInstall: s.iosInstallDismissed,
 				pwaInstall: s.pwaInstallDismissed,
 				pushNotification: s.pushNotificationDismissed,
+				desktopHandoff: s.desktopHandoffDismissed,
 				desktopNotification: s.desktopNotificationDismissed,
 				premiumGracePeriod: s.premiumGracePeriodDismissed,
 				premiumExpired: s.premiumExpiredDismissed,
@@ -182,6 +190,7 @@ export class Nagbar implements NagbarSettings {
 				s.premiumOnboardingDismissed = m.premiumOnboarding;
 				s.giftInventoryDismissed = m.giftInventory;
 				s.desktopDownloadDismissed = m.desktopDownload;
+				s.desktopHandoffDismissed = m.desktopHandoff;
 				s.guildMembershipCtaDismissed = m.guildMembershipCta;
 				s.visionaryMfaDismissed = m.visionaryMfa;
 				s.pendingBulkDeletionDismissed = {...m.pendingBulkDeletion};
@@ -261,6 +270,10 @@ export class Nagbar implements NagbarSettings {
 
 	getForceHideUnclaimedAccount(): boolean {
 		return this.forceHideUnclaimedAccount;
+	}
+
+	getForceHideDesktopHandoff(): boolean {
+		return this.forceHideDesktopHandoff;
 	}
 
 	getForceHideDesktopNotification(): boolean {
@@ -348,64 +361,18 @@ export class Nagbar implements NagbarSettings {
 	}
 
 	resetAll(): void {
-		this.iosInstallDismissed = false;
-		this.pwaInstallDismissed = false;
-		this.pushNotificationDismissed = false;
-		this.desktopNotificationDismissed = false;
-		this.premiumGracePeriodDismissed = false;
-		this.premiumExpiredDismissed = false;
-		this.premiumOnboardingDismissed = false;
-		this.giftInventoryDismissed = false;
-		this.desktopDownloadDismissed = false;
+
+		// Reset dismissals in a loop for easier maintenance
+		for (const property of Object.keys(this) as Array<keyof NagbarSettings>) {
+			if (typeof this[property] === 'boolean' && this[property]) {
+        (this as any)[property] = false; // rigid static NagSettings type checking = casting 'this'
+    	}
+		}
+
 		this.pendingBulkDeletionDismissed = {};
 		this.invitesDisabledDismissed = {};
 		this.guildMfaRequirementDismissed = {};
-		this.guildMembershipCtaDismissed = false;
-		this.visionaryMfaDismissed = false;
-		this.buildEnvironmentDismissedThisSession = false;
-		this.claimAccountModalShownThisSession = false;
-		this.forceOffline = false;
-		this.forceEmailVerification = false;
-		this.forceIOSInstall = false;
-		this.forcePWAInstall = false;
-		this.forcePushNotification = false;
-		this.forceUnclaimedAccount = false;
-		this.forceDesktopNotification = false;
-		this.forceInvitesDisabled = false;
-		this.forcePremiumGracePeriod = false;
-		this.forcePremiumExpired = false;
-		this.forcePremiumOnboarding = false;
-		this.forceGiftInventory = false;
-		this.forceDesktopDownload = false;
-		this.forceGuildMembershipCta = false;
-		this.forceVisionaryMfa = false;
-		this.forceTermsAcceptance = false;
-		this.forceCorruptedInstallation = false;
-		this.forceScheduledMaintenance = false;
-		this.forceVoiceSessionRestore = false;
-		this.forceGuildMfaRequirement = false;
-		this.forceConnectionNotice = false;
-		this.forceHideOffline = false;
-		this.forceHideEmailVerification = false;
-		this.forceHideIOSInstall = false;
-		this.forceHidePWAInstall = false;
-		this.forceHidePushNotification = false;
-		this.forceHideUnclaimedAccount = false;
-		this.forceHideDesktopNotification = false;
-		this.forceHideInvitesDisabled = false;
-		this.forceHidePremiumGracePeriod = false;
-		this.forceHidePremiumExpired = false;
-		this.forceHidePremiumOnboarding = false;
-		this.forceHideGiftInventory = false;
-		this.forceHideDesktopDownload = false;
-		this.forceHideGuildMembershipCta = false;
-		this.forceHideVisionaryMfa = false;
-		this.forceHideTermsAcceptance = false;
-		this.forceHideCorruptedInstallation = false;
-		this.forceHideScheduledMaintenance = false;
-		this.forceHideVoiceSessionRestore = false;
-		this.forceHideGuildMfaRequirement = false;
-		this.forceHideConnectionNotice = false;
+		// this.guildMembershipCtaDismissed = false;
 	}
 
 	handleGuildUpdate(action: {

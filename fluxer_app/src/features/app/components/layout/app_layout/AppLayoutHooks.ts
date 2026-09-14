@@ -160,6 +160,11 @@ export const useNagbarConditions = (): NagbarConditions => {
 		if (nagbarState.forceDesktopDownload) return true;
 		return isDesktopBrowser && !nagbarState.desktopDownloadDismissed;
 	})();
+	const canShowDesktopHandoff = (() => {
+		if (nagbarState.forceHideDesktopHandoff) return false;
+		if (nagbarState.forceDesktopHandoff) return true;
+		return isDesktopBrowser && !nagbarState.desktopHandoffDismissed;
+	})();
 	const canShowVisionaryMfa = (() => {
 		if (isSelfHosted) return false;
 		if (nagbarState.forceHideVisionaryMfa) return false;
@@ -273,6 +278,11 @@ export const useNagbarConditions = (): NagbarConditions => {
 			: nagbarState.forceEmailVerification
 				? true
 				: Boolean(RuntimeConfig.emailsEnabled && user?.isClaimed() && !user.verified),
+		canShowDesktopHandoff: nagbarState.forceHideDesktopHandoff
+			? false
+			: nagbarState.forceDesktopHandoff
+				? true
+				: canShowDesktopHandoff && !nagbarState.desktopHandoffDismissed,
 		canShowDesktopNotification: nagbarState.forceHideDesktopNotification
 			? false
 			: nagbarState.forceDesktopNotification
@@ -378,6 +388,12 @@ export const useActiveNagbars = (conditions: NagbarConditions): Array<NagbarStat
 				type: NagbarType.VISIONARY_MFA,
 				priority: 7,
 				visible: conditions.canShowVisionaryMfa,
+				dismissible: true,
+			},
+			{
+				type: NagbarType.DESKTOP_HANDOFF,
+				priority: 7.5,
+				visible: conditions.canShowDesktopHandoff,
 				dismissible: true,
 			},
 			{
