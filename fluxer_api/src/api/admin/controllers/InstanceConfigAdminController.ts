@@ -1,5 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {createUserID} from '@app/api/BrandedTypes';
+import {Config} from '@app/api/Config';
+import {
+	type InstancePolicyConfig,
+	REGISTRATION_PENDING_APPROVAL_TRAIT,
+	REGISTRATION_REJECTED_TRAIT,
+} from '@app/api/instance/InstanceConfigRepository';
+import {deriveSsoRedirectUri, normalizeAndValidateSsoConfig} from '@app/api/instance/SsoConfigValidation';
+import {requireAdminACL} from '@app/api/middleware/AdminMiddleware';
+import {RateLimitMiddleware} from '@app/api/middleware/RateLimitMiddleware';
+import {OpenAPI} from '@app/api/middleware/ResponseTypeMiddleware';
+import {getGatewayRolloutConfigPublisher, getInstanceConfigRepository} from '@app/api/middleware/ServiceSingletons';
+import {RateLimitConfigs} from '@app/api/RateLimitConfig';
+import type {HonoApp, HonoEnv} from '@app/api/types/HonoEnv';
+import {Validator} from '@app/api/Validator';
 import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
 import {InstancePolicyTransitionNotAllowedError} from '@fluxer/errors/src/domains/core/InstancePolicyTransitionNotAllowedError';
 import {
@@ -14,26 +29,20 @@ import {
 	RegistrationUrlIdParam,
 } from '@fluxer/schema/src/domains/admin/AdminSchemas';
 import {GatewayRolloutConfigSchema} from '@fluxer/schema/src/domains/admin/GatewayRolloutSchemas';
+import {VoiceNoiseSuppressionConfigSchema} from '@fluxer/schema/src/domains/admin/VoiceNoiseSuppressionSchemas';
 import {UserIdParam} from '@fluxer/schema/src/domains/common/CommonParamSchemas';
+import {BlockedMessageGroupsConfigSchema} from '@fluxer/schema/src/domains/experiment/BlockedMessageGroupsSchemas';
+import {ExperimentDeliveryConfigSchema} from '@fluxer/schema/src/domains/experiment/ExperimentSchemas';
+import {ExpressionInfoCardConfigSchema} from '@fluxer/schema/src/domains/experiment/ExpressionInfoCardSchemas';
+import {GuildActivityLogPresentationConfigSchema} from '@fluxer/schema/src/domains/experiment/GuildActivityLogPresentationSchemas';
+import {GuildHeaderCollapseConfigSchema} from '@fluxer/schema/src/domains/experiment/GuildHeaderCollapseSchemas';
+import {MessageHoverTrackingConfigSchema} from '@fluxer/schema/src/domains/experiment/MessageHoverTrackingSchemas';
+import {MessageKeyboardFocusConfigSchema} from '@fluxer/schema/src/domains/experiment/MessageKeyboardFocusSchemas';
+import {TypingIndicatorReworkConfigSchema} from '@fluxer/schema/src/domains/experiment/TypingIndicatorReworkSchemas';
+import type {InstanceBranding} from '@fluxer/schema/src/domains/instance/InstanceSchemas';
 import {SmtpEmailProvider} from '@pkgs/email/src/SmtpEmailProvider';
 import type {Context} from 'hono';
 import {createMiddleware} from 'hono/factory';
-import {createUserID} from '../../BrandedTypes';
-import {Config} from '../../Config';
-import {
-	type InstanceBrandingConfig,
-	type InstancePolicyConfig,
-	REGISTRATION_PENDING_APPROVAL_TRAIT,
-	REGISTRATION_REJECTED_TRAIT,
-} from '../../instance/InstanceConfigRepository';
-import {deriveSsoRedirectUri, normalizeAndValidateSsoConfig} from '../../instance/SsoConfigValidation';
-import {requireAdminACL} from '../../middleware/AdminMiddleware';
-import {RateLimitMiddleware} from '../../middleware/RateLimitMiddleware';
-import {OpenAPI} from '../../middleware/ResponseTypeMiddleware';
-import {getGatewayRolloutConfigPublisher, getInstanceConfigRepository} from '../../middleware/ServiceSingletons';
-import {RateLimitConfigs} from '../../RateLimitConfig';
-import type {HonoApp, HonoEnv} from '../../types/HonoEnv';
-import {Validator} from '../../Validator';
 
 const INSTANCE_BRANDING_ENTITY_ID = 0n;
 
@@ -51,9 +60,33 @@ function omitUndefinedFields<T extends object>(value: T): Partial<T> {
 
 async function buildInstanceConfigResponse(): Promise<InstanceConfigResponse> {
 	const instanceConfigRepository = getInstanceConfigRepository();
-	const [ssoConfig, gatewayRollout, registrationConfig, registrationUrls, pendingRegistrations] = await Promise.all([
+	const [
+		ssoConfig,
+		gatewayRollout,
+		voiceNoiseSuppression,
+		guildActivityLogPresentation,
+		experimentDelivery,
+		messageHoverTracking,
+		messageKeyboardFocus,
+		blockedMessageGroups,
+		expressionInfoCard,
+		guildHeaderCollapse,
+		typingIndicatorRework,
+		registrationConfig,
+		registrationUrls,
+		pendingRegistrations,
+	] = await Promise.all([
 		instanceConfigRepository.getSsoConfig(),
 		instanceConfigRepository.getGatewayRolloutConfig(),
+		instanceConfigRepository.getVoiceNoiseSuppressionConfig(),
+		instanceConfigRepository.getGuildActivityLogPresentationConfig(),
+		instanceConfigRepository.getExperimentDeliveryConfig(),
+		instanceConfigRepository.getMessageHoverTrackingConfig(),
+		instanceConfigRepository.getMessageKeyboardFocusConfig(),
+		instanceConfigRepository.getBlockedMessageGroupsConfig(),
+		instanceConfigRepository.getExpressionInfoCardConfig(),
+		instanceConfigRepository.getGuildHeaderCollapseConfig(),
+		instanceConfigRepository.getTypingIndicatorReworkConfig(),
 		instanceConfigRepository.getRegistrationConfig(),
 		instanceConfigRepository.getRegistrationUrlsForAdmin(),
 		instanceConfigRepository.getPendingRegistrations(),
@@ -83,6 +116,15 @@ async function buildInstanceConfigResponse(): Promise<InstanceConfigResponse> {
 			redirect_uri: deriveSsoRedirectUri(Config.endpoints.webApp),
 		},
 		gateway_rollout: gatewayRollout,
+		voice_noise_suppression: voiceNoiseSuppression,
+		guild_activity_log_presentation: guildActivityLogPresentation,
+		experiment_delivery: experimentDelivery,
+		message_hover_tracking: messageHoverTracking,
+		message_keyboard_focus: messageKeyboardFocus,
+		blocked_message_groups: blockedMessageGroups,
+		expression_info_card: expressionInfoCard,
+		guild_header_collapse: guildHeaderCollapse,
+		typing_indicator_rework: typingIndicatorRework,
 		registration: {
 			...registrationConfig,
 			urls: registrationUrls,
@@ -213,6 +255,111 @@ export function InstanceConfigAdminController(app: HonoApp) {
 				const validated = GatewayRolloutConfigSchema.parse(merged);
 				await instanceConfigRepository.setGatewayRolloutConfig(validated);
 				await getGatewayRolloutConfigPublisher().publish(validated);
+			}
+			if (data.voice_noise_suppression) {
+				const patch = omitUndefinedFields(data.voice_noise_suppression);
+				if (Object.keys(patch).length > 0) {
+					const currentNoiseSuppression = await instanceConfigRepository.getVoiceNoiseSuppressionConfig();
+					const validated = VoiceNoiseSuppressionConfigSchema.parse({
+						...currentNoiseSuppression,
+						...patch,
+						config_version: currentNoiseSuppression.config_version + 1,
+					});
+					await instanceConfigRepository.setVoiceNoiseSuppressionConfig(validated);
+				}
+			}
+			if (data.guild_activity_log_presentation) {
+				const patch = omitUndefinedFields(data.guild_activity_log_presentation);
+				if (Object.keys(patch).length > 0) {
+					const currentGuildActivityLogPresentation =
+						await instanceConfigRepository.getGuildActivityLogPresentationConfig();
+					const validated = GuildActivityLogPresentationConfigSchema.parse({
+						...currentGuildActivityLogPresentation,
+						...patch,
+						config_version: currentGuildActivityLogPresentation.config_version + 1,
+					});
+					await instanceConfigRepository.setGuildActivityLogPresentationConfig(validated);
+				}
+			}
+			if (data.message_hover_tracking) {
+				const patch = omitUndefinedFields(data.message_hover_tracking);
+				if (Object.keys(patch).length > 0) {
+					const currentMessageHoverTracking = await instanceConfigRepository.getMessageHoverTrackingConfig();
+					const validated = MessageHoverTrackingConfigSchema.parse({
+						...currentMessageHoverTracking,
+						...patch,
+						config_version: currentMessageHoverTracking.config_version + 1,
+					});
+					await instanceConfigRepository.setMessageHoverTrackingConfig(validated);
+				}
+			}
+			if (data.message_keyboard_focus) {
+				const patch = omitUndefinedFields(data.message_keyboard_focus);
+				if (Object.keys(patch).length > 0) {
+					const currentMessageKeyboardFocus = await instanceConfigRepository.getMessageKeyboardFocusConfig();
+					const validated = MessageKeyboardFocusConfigSchema.parse({
+						...currentMessageKeyboardFocus,
+						...patch,
+						config_version: currentMessageKeyboardFocus.config_version + 1,
+					});
+					await instanceConfigRepository.setMessageKeyboardFocusConfig(validated);
+				}
+			}
+			if (data.blocked_message_groups) {
+				const patch = omitUndefinedFields(data.blocked_message_groups);
+				if (Object.keys(patch).length > 0) {
+					const currentBlockedMessageGroups = await instanceConfigRepository.getBlockedMessageGroupsConfig();
+					const validated = BlockedMessageGroupsConfigSchema.parse({
+						...currentBlockedMessageGroups,
+						...patch,
+						config_version: currentBlockedMessageGroups.config_version + 1,
+					});
+					await instanceConfigRepository.setBlockedMessageGroupsConfig(validated);
+				}
+			}
+			if (data.expression_info_card) {
+				const patch = omitUndefinedFields(data.expression_info_card);
+				if (Object.keys(patch).length > 0) {
+					const currentExpressionInfoCard = await instanceConfigRepository.getExpressionInfoCardConfig();
+					const validated = ExpressionInfoCardConfigSchema.parse({
+						...currentExpressionInfoCard,
+						...patch,
+						config_version: currentExpressionInfoCard.config_version + 1,
+					});
+					await instanceConfigRepository.setExpressionInfoCardConfig(validated);
+				}
+			}
+			if (data.guild_header_collapse) {
+				const patch = omitUndefinedFields(data.guild_header_collapse);
+				if (Object.keys(patch).length > 0) {
+					const currentGuildHeaderCollapse = await instanceConfigRepository.getGuildHeaderCollapseConfig();
+					const validated = GuildHeaderCollapseConfigSchema.parse({
+						...currentGuildHeaderCollapse,
+						...patch,
+						config_version: currentGuildHeaderCollapse.config_version + 1,
+					});
+					await instanceConfigRepository.setGuildHeaderCollapseConfig(validated);
+				}
+			}
+			if (data.typing_indicator_rework) {
+				const patch = omitUndefinedFields(data.typing_indicator_rework);
+				if (Object.keys(patch).length > 0) {
+					const currentTypingIndicatorRework = await instanceConfigRepository.getTypingIndicatorReworkConfig();
+					const validated = TypingIndicatorReworkConfigSchema.parse({
+						...currentTypingIndicatorRework,
+						...patch,
+						config_version: currentTypingIndicatorRework.config_version + 1,
+					});
+					await instanceConfigRepository.setTypingIndicatorReworkConfig(validated);
+				}
+			}
+			if (data.experiment_delivery) {
+				const currentExperimentDelivery = await instanceConfigRepository.getExperimentDeliveryConfig();
+				const validated = ExperimentDeliveryConfigSchema.parse({
+					...currentExperimentDelivery,
+					...data.experiment_delivery,
+				});
+				await instanceConfigRepository.setExperimentDeliveryConfig(validated);
 			}
 			if (data.sso) {
 				const sso = data.sso;
@@ -404,7 +551,7 @@ export function InstanceConfigAdminController(app: HonoApp) {
 				base64Image: image ?? null,
 				errorPath: 'image',
 			});
-			const brandingPatch: Partial<InstanceBrandingConfig> = {[`${kind}_url`]: prepared.newCdnUrl};
+			const brandingPatch: Partial<InstanceBranding> = {[`${kind}_url`]: prepared.newCdnUrl};
 			await instanceConfigRepository.setAppPublicConfig({branding: brandingPatch});
 			return ctx.json(await buildInstanceConfigResponse());
 		},
@@ -514,6 +661,7 @@ export function InstanceConfigAdminController(app: HonoApp) {
 		async (ctx) => {
 			const userId = ctx.req.valid('param').user_id.toString();
 			const decision = ctx.req.valid('json').status === 'approved' ? 'approve' : 'reject';
+			await instanceConfigRepository.getPendingRegistrations();
 			await updatePendingRegistrationUser(ctx, userId, decision);
 			await instanceConfigRepository.removePendingRegistration(userId);
 			return ctx.json(await buildInstanceConfigResponse());
@@ -592,11 +740,10 @@ async function applyInstancePolicyUpdate(
 			patch.deferred_phone_gate_member_threshold = policy.deferred_phone_gate.member_threshold;
 		}
 	}
-	if (Object.keys(patch).length > 0) {
+	if (patch.premium_mode !== undefined) {
+		await ctx.get('limitConfigService').updatePolicyConfig(patch);
+	} else if (Object.keys(patch).length > 0) {
 		await instanceConfigRepository.setInstancePolicyConfig(patch);
-	}
-	if (policy.premium_mode !== undefined && policy.premium_mode !== current.premium_mode) {
-		await ctx.get('limitConfigService').reloadForPolicyChange();
 	}
 }
 

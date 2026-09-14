@@ -18,8 +18,9 @@ import {ReplyBar} from '@app/features/channel/components/ChannelReplyBar';
 import {ChannelStickersArea} from '@app/features/channel/components/ChannelStickersArea';
 import {
 	CHANNEL_DESCRIPTOR,
-	MESSAGE_2_DESCRIPTOR,
-	MESSAGE_DESCRIPTOR,
+	MESSAGE_CHANNEL_DESCRIPTOR,
+	MESSAGE_GROUP_DESCRIPTOR,
+	MESSAGE_USER_DESCRIPTOR,
 	OPEN_MENU_DESCRIPTOR,
 	YOU_DO_NOT_HAVE_PERMISSION_TO_SEND_MESSAGES_DESCRIPTOR,
 } from '@app/features/channel/components/channel_textarea/shared';
@@ -32,7 +33,7 @@ import {
 import {MessageCharacterCounter} from '@app/features/channel/components/MessageCharacterCounter';
 import {SlashCommandParamBar} from '@app/features/channel/components/SlashCommandParamBar';
 import {SlowmodeIndicator} from '@app/features/channel/components/SlowmodeIndicator';
-import {TypingUsers, usePresentableTypingUsers} from '@app/features/channel/components/TypingUsers';
+import {TypingAnnouncer, TypingUsers, usePresentableTypingUsers} from '@app/features/channel/components/TypingUsers';
 import wrapperStyles from '@app/features/channel/components/textarea/InputWrapper.module.css';
 import {MobileTextareaPlusBottomSheet} from '@app/features/channel/components/textarea/MobileTextareaPlusBottomSheet';
 import {TextareaButton} from '@app/features/channel/components/textarea/TextareaButton';
@@ -86,13 +87,18 @@ import {
 } from '@app/features/messaging/state/MentionConfirmationStateMachine';
 import MessageEdit from '@app/features/messaging/state/MessageEdit';
 import MessageEditMobile from '@app/features/messaging/state/MessageEditMobile';
+import MessageKeyboardFocusRollout from '@app/features/messaging/state/MessageKeyboardFocusRollout';
 import MessageReply from '@app/features/messaging/state/MessageReply';
 import Messages from '@app/features/messaging/state/MessagingMessages';
 import {CloudUpload} from '@app/features/messaging/upload/CloudUpload';
 import {canAttachFilesInChannel} from '@app/features/messaging/utils/AttachmentPermissionUtils';
 import {openFilePicker} from '@app/features/messaging/utils/FilePickerUtils';
 import * as FileUploadUtils from '@app/features/messaging/utils/FileUploadUtils';
-import {hasVisibleMessageContent} from '@app/features/messaging/utils/MessageRequestUtils';
+import {
+	canSubmitComposerContent,
+	getComposerMessageContent,
+	hasVisibleMessageContent,
+} from '@app/features/messaging/utils/MessageRequestUtils';
 import type {MentionSegment} from '@app/features/messaging/utils/TextareaSegmentManager';
 import {
 	resolveTypedEmojiShortcodes,
@@ -109,7 +115,6 @@ import {openPopout} from '@app/features/ui/popover/PopoverPopout';
 import ContextMenuState from '@app/features/ui/state/ContextMenu';
 import KeyboardMode from '@app/features/ui/state/KeyboardMode';
 import MobileLayout from '@app/features/ui/state/MobileLayout';
-import * as PlaceholderUtils from '@app/features/ui/utils/PlaceholderUtils';
 import Users from '@app/features/user/state/Users';
 import {openVoiceMessageComposerModal} from '@app/features/voice/components/VoiceMessageComposerModal';
 import {flxElementClassName} from '@app/lib/react';
@@ -185,6 +190,7 @@ export const LexicalChannelTextareaContent = observer(
 		const expressionPickerTriggerRef = useRef<HTMLButtonElement>(null);
 		const invisibleExpressionPickerTriggerRef = useRef<HTMLDivElement>(null);
 		const containerRef = useRef<HTMLDivElement>(null);
+		const typingStatusRailLeftRef = useRef<HTMLElement>(null);
 		const contentAreaRef = useRef<HTMLElement | null>(null);
 		const plusButtonRef = useRef<HTMLButtonElement | null>(null);
 		const plusMenuOpenedAtRef = useRef(0);
@@ -267,6 +273,7 @@ export const LexicalChannelTextareaContent = observer(
 		const referencedMessage = MessageReply.getReferencedMessage(channel.id);
 		const editingMessage = editingMobileMessageId ? Messages.getMessage(channel.id, editingMobileMessageId) : null;
 		const editingMessageForComposer = editingMessage === undefined ? null : editingMessage;
+		const isEditingMessageOnMobile = editingMessageForComposer !== null && mobileLayout.enabled;
 		const maxMessageLength = Limits.getMaxMessageLength();
 		const premiumMaxLength = Limits.getStockValue('max_message_length', maxMessageLength);
 		const maxAttachments = Limits.getMaxAttachmentsPerMessage();
@@ -414,7 +421,7 @@ export const LexicalChannelTextareaContent = observer(
 			}
 			if (mobileLayout.enabled) {
 				const index = pendingMentionConfirmation.mentionType;
-				const title = getMentionTitle(index, pendingMentionConfirmation.roleName);
+				const title = getMentionTitle(i18n, index, pendingMentionConfirmation.roleName);
 				const description = getMentionDescription(
 					index,
 					pendingMentionConfirmation.memberCount,
@@ -496,6 +503,7 @@ export const LexicalChannelTextareaContent = observer(
 			isSlotMenu,
 			onCursorMove,
 			handleSelect,
+			specialMentionsAllowed,
 		} = useLexicalAutocomplete({
 			channel,
 			handleRef,
@@ -526,7 +534,11 @@ export const LexicalChannelTextareaContent = observer(
 			() => resolveTypedEmojiContent(wireValue.trim()),
 			[resolveTypedEmojiContent, wireValue],
 		);
-		const hasMessageContent = useMemo(() => hasVisibleMessageContent(trimmedMessageContent), [trimmedMessageContent]);
+		const composerMessageContent = useMemo(
+			() => getComposerMessageContent(trimmedMessageContent, isEditingMessageOnMobile),
+			[isEditingMessageOnMobile, trimmedMessageContent],
+		);
+		const hasMessageContent = useMemo(() => hasVisibleMessageContent(composerMessageContent), [composerMessageContent]);
 		const isSubmissionBlockedBySlowmode = useMemo(() => {
 			if (!isSlowmodeActive || isEditingMessageInComposer) {
 				return false;
@@ -708,12 +720,16 @@ export const LexicalChannelTextareaContent = observer(
 		}, [channel.id, hasAttachments, hasPendingSticker]);
 		const showAttachments = hasAttachments;
 		const showStickers = hasPendingSticker;
-		const isOverCharacterLimit = trimmedMessageContent.length > maxMessageLength;
-		const canSubmit =
-			!textareaInputDisabled &&
-			!isSubmissionBlockedBySlowmode &&
-			!isOverCharacterLimit &&
-			(hasMessageContent || hasAttachments || hasPendingSticker);
+		const isOverCharacterLimit = composerMessageContent.length > maxMessageLength;
+		const canSubmit = canSubmitComposerContent({
+			inputDisabled: textareaInputDisabled,
+			isSubmissionBlockedBySlowmode,
+			isOverCharacterLimit,
+			hasMessageContent,
+			hasAttachments,
+			hasPendingSticker,
+			isEditingMessageOnMobile,
+		});
 		const {onSubmit} = useTextareaSubmit({
 			channelId: channel.id,
 			guildId: channel.guildId === undefined ? null : channel.guildId,
@@ -871,15 +887,17 @@ export const LexicalChannelTextareaContent = observer(
 			onSubmit();
 		}, [canSubmit, channel, hasAttachments, onSubmit]);
 		const handleArrowUpEmpty = useCallback(() => {
+			const claimsArrowUp = MessageKeyboardFocusRollout.enabled;
 			if (KeyboardMode.keyboardModeEnabled) {
 				ComponentBus.dispatch('FOCUS_BOTTOMMOST_MESSAGE', {channelId: channel.id});
-				return;
+				return claimsArrowUp;
 			}
 			const message = Messages.getLastEditableMessage(channel.id);
 			if (!message) {
-				return;
+				return false;
 			}
 			MessageCommands.startEdit(channel.id, message.id, message.content);
+			return claimsArrowUp;
 		}, [channel.id]);
 		useTextareaDraftAndTyping({
 			channelId: channel.id,
@@ -902,21 +920,13 @@ export const LexicalChannelTextareaContent = observer(
 			isFocused,
 			handleArrowUpEmpty,
 		});
-		const messageLabel = i18n._(MESSAGE_DESCRIPTOR);
-		const messagePrefix = `${messageLabel} `;
 		const placeholderText = disabled
 			? i18n._(YOU_DO_NOT_HAVE_PERMISSION_TO_SEND_MESSAGES_DESCRIPTOR)
 			: channel.guildId != null
-				? PlaceholderUtils.getChannelPlaceholder(
-						`#${channel.name || i18n._(CHANNEL_DESCRIPTOR)}`,
-						messagePrefix,
-						Number.MAX_SAFE_INTEGER,
-					)
-				: PlaceholderUtils.getDMPlaceholder(
-						ChannelDisplayUtils.getDMDisplayName(channel),
-						channel.isDM() ? i18n._(MESSAGE_2_DESCRIPTOR) : messagePrefix,
-						Number.MAX_SAFE_INTEGER,
-					);
+				? i18n._(MESSAGE_CHANNEL_DESCRIPTOR, {channelName: channel.name || i18n._(CHANNEL_DESCRIPTOR)})
+				: channel.isDM()
+					? i18n._(MESSAGE_USER_DESCRIPTOR, {userName: ChannelDisplayUtils.getDMDisplayName(channel)})
+					: i18n._(MESSAGE_GROUP_DESCRIPTOR, {groupName: ChannelDisplayUtils.getDMDisplayName(channel)});
 		useEffect(() => {
 			const unsubscribe = ComponentBus.subscribe('FOCUS_TEXTAREA', (payload?: unknown) => {
 				const payloadValue = payload === null || payload === undefined ? {} : payload;
@@ -1237,6 +1247,7 @@ export const LexicalChannelTextareaContent = observer(
 						data-flx="channel.lexical-channel-textarea-content.flx-channel-textarea-status-rail"
 					>
 						<flx-channel-textarea-status-rail-left
+							ref={typingStatusRailLeftRef}
 							className={flxElementClassName(wrapperStyles.statusRailLeft)}
 							data-flx="channel.lexical-channel-textarea-content.flx-channel-textarea-status-rail-left"
 						>
@@ -1249,10 +1260,12 @@ export const LexicalChannelTextareaContent = observer(
 										channel={channel}
 										withText={true}
 										showAvatars={true}
+										overflowContainerRef={typingStatusRailLeftRef}
 										data-flx="channel.lexical-channel-textarea-content.typing-users"
 									/>
 								</flx-channel-textarea-typing-slot>
 							)}
+							<TypingAnnouncer channel={channel} data-flx="channel.lexical-channel-textarea-content.typing-announcer" />
 						</flx-channel-textarea-status-rail-left>
 						{isSlowmodeIndicatorVisible && (
 							<flx-channel-textarea-slowmode-slot
@@ -1343,9 +1356,12 @@ export const LexicalChannelTextareaContent = observer(
 										initialSegments={initialDraftRef.current.segments}
 										slotResolvers={slotResolvers}
 										emojiShortcodeResolver={composerEmojiResolver}
+										specialMentionsAllowed={specialMentionsAllowed}
 										channelId={channel.id}
 										guildId={channel.guildId}
 										submitOnEnter={!mobileLayout.enabled}
+										maxWireLength={maxMessageLength}
+										silentMessagePrefix={!isEditingMessageOnMobile}
 										focusRingTarget={containerRef}
 										focusRingEnabled={!textareaInputDisabled && Accessibility.showTextareaFocusRing}
 										className={lexicalStyles.composerEditable}
@@ -1406,7 +1422,7 @@ export const LexicalChannelTextareaContent = observer(
 						styles.inputSection,
 					)}
 					<MessageCharacterCounter
-						currentLength={trimmedMessageContent.length}
+						currentLength={composerMessageContent.length}
 						maxLength={maxMessageLength}
 						canUpgrade={maxMessageLength < premiumMaxLength}
 						premiumMaxLength={premiumMaxLength}

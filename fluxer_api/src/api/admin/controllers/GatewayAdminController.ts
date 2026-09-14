@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {createGuildID} from '@app/api/BrandedTypes';
+import {requireAdminACL} from '@app/api/middleware/AdminMiddleware';
+import {RateLimitMiddleware} from '@app/api/middleware/RateLimitMiddleware';
+import {OpenAPI} from '@app/api/middleware/ResponseTypeMiddleware';
+import {RateLimitConfigs} from '@app/api/RateLimitConfig';
+import type {HonoApp} from '@app/api/types/HonoEnv';
+import {Validator} from '@app/api/Validator';
 import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
 import {GetProcessMemoryStatsQuery} from '@fluxer/schema/src/domains/admin/AdminGuildSchemas';
 import {
@@ -9,13 +16,6 @@ import {
 	ReloadAllGuildsResponse,
 	ReloadGuildsRequest,
 } from '@fluxer/schema/src/domains/admin/AdminSchemas';
-import {createGuildID} from '../../BrandedTypes';
-import {requireAdminACL} from '../../middleware/AdminMiddleware';
-import {RateLimitMiddleware} from '../../middleware/RateLimitMiddleware';
-import {OpenAPI} from '../../middleware/ResponseTypeMiddleware';
-import {RateLimitConfigs} from '../../RateLimitConfig';
-import type {HonoApp} from '../../types/HonoEnv';
-import {Validator} from '../../Validator';
 
 export function GatewayAdminController(app: HonoApp) {
 	app.get(
@@ -93,9 +93,23 @@ export function GatewayAdminController(app: HonoApp) {
 		}),
 		async (ctx) => {
 			const adminService = ctx.get('adminService');
+			const adminUserId = ctx.get('adminUserId');
+			const auditLogReason = ctx.get('auditLogReason');
 			const body = ctx.req.valid('json');
 			const guildIds = body.guild_ids.map((id) => createGuildID(id));
-			return ctx.json(await adminService.guildServiceAggregate.managementService.reloadAllGuilds(guildIds));
+			const result = await adminService.guildServiceAggregate.managementService.reloadAllGuilds(guildIds);
+			await adminService.auditService.createAuditLog({
+				adminUserId,
+				targetType: 'guild',
+				targetId: BigInt(0),
+				action: 'reload_guilds',
+				auditLogReason,
+				metadata: new Map([
+					['guild_count', guildIds.length.toString()],
+					['reloaded', result.count.toString()],
+				]),
+			});
+			return ctx.json(result);
 		},
 	);
 }

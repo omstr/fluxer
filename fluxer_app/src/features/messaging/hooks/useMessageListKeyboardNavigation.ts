@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {isEditableElement} from '@app/features/app/keybindings/utils/EditableElement';
 import MessageFocus from '@app/features/messaging/state/MessageFocus';
+import MessageKeyboardFocusRollout from '@app/features/messaging/state/MessageKeyboardFocusRollout';
+import {getMessageSelector} from '@app/features/messaging/utils/MessageNodeSelectors';
 import type {ScrollerHandle} from '@app/features/ui/components/Scroller';
 import KeyboardMode from '@app/features/ui/state/KeyboardMode';
 import {type RefObject, useEffect} from 'react';
@@ -15,6 +18,7 @@ interface MessageListKeyboardNavigationOptions {
 	hasMoreAfter?: boolean;
 	isLoadingMore?: boolean;
 	onEscape?: () => void;
+	onNavigatePastNewest?: () => void;
 	allowWhenInactive?: boolean;
 }
 
@@ -52,17 +56,6 @@ const EMPTY_MESSAGE_NODES_SNAPSHOT: MessageNodesSnapshot = {
 	selector: '',
 	ts: 0,
 };
-const escapeSelectorValue = (value: string): string => {
-	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-		return CSS.escape(value);
-	}
-	return value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"');
-};
-const getMessageSelector = (channelId?: string, messageId?: string): string => {
-	const channelSelector = channelId ? `[data-channel-id="${escapeSelectorValue(channelId)}"]` : '[data-channel-id]';
-	const messageSelector = messageId ? `[data-message-id="${escapeSelectorValue(messageId)}"]` : '[data-message-id]';
-	return `${channelSelector}${messageSelector}`;
-};
 
 export function useMessageListKeyboardNavigation(options: MessageListKeyboardNavigationOptions): void {
 	const {
@@ -75,9 +68,11 @@ export function useMessageListKeyboardNavigation(options: MessageListKeyboardNav
 		hasMoreAfter = false,
 		isLoadingMore = false,
 		onEscape,
+		onNavigatePastNewest,
 		allowWhenInactive = false,
 	} = options;
 	const keyboardModeEnabled = KeyboardMode.keyboardModeEnabled;
+	const keyboardNavigationEnabled = MessageKeyboardFocusRollout.enabled;
 	useEffect(() => {
 		if (!keyboardModeEnabled) return;
 		let messageNodesCache: MessageNodesSnapshot = EMPTY_MESSAGE_NODES_SNAPSHOT;
@@ -140,10 +135,19 @@ export function useMessageListKeyboardNavigation(options: MessageListKeyboardNav
 			};
 			return messageNodesCache;
 		};
+		const hasFocusInside = (node: HTMLElement): boolean => {
+			const activeElement = node.ownerDocument?.activeElement ?? document.activeElement;
+			return activeElement != null && (activeElement === node || node.contains(activeElement));
+		};
 		const focusNode = (node: HTMLElement, messageId: string) => {
 			if (onFocusMessage) {
 				onFocusMessage(messageId);
-				return;
+				if (!keyboardNavigationEnabled || hasFocusInside(node)) {
+					return;
+				}
+			}
+			if (keyboardNavigationEnabled && node.tabIndex < 0) {
+				node.tabIndex = -1;
 			}
 			node.focus({preventScroll: true});
 			node.scrollIntoView({block: 'nearest', inline: 'nearest'});
@@ -166,6 +170,8 @@ export function useMessageListKeyboardNavigation(options: MessageListKeyboardNav
 			if (nextIdx >= nodes.length) {
 				if (hasMoreAfter && onLoadMoreAfter && !isLoadingMore) {
 					onLoadMoreAfter();
+				} else if (keyboardNavigationEnabled && !hasMoreAfter && onNavigatePastNewest) {
+					onNavigatePastNewest();
 				}
 				return;
 			}
@@ -197,7 +203,10 @@ export function useMessageListKeyboardNavigation(options: MessageListKeyboardNav
 		};
 		const handleKeyDown = (event: KeyboardEvent) => {
 			if (!keyboardModeEnabled) return;
-			if (isEditableTarget(document.activeElement)) return;
+			const activeElementIsEditable = keyboardNavigationEnabled
+				? isEditableElement(document.activeElement)
+				: isEditableTarget(document.activeElement);
+			if (activeElementIsEditable) return;
 			const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
 			const isNavigationKey = delta !== 0;
 			if (isNavigationKey && hasShortcutModifier(event)) return;
@@ -226,6 +235,7 @@ export function useMessageListKeyboardNavigation(options: MessageListKeyboardNav
 		};
 	}, [
 		keyboardModeEnabled,
+		keyboardNavigationEnabled,
 		containerRef,
 		channelId,
 		onFocusMessage,
@@ -235,6 +245,7 @@ export function useMessageListKeyboardNavigation(options: MessageListKeyboardNav
 		hasMoreAfter,
 		isLoadingMore,
 		onEscape,
+		onNavigatePastNewest,
 		allowWhenInactive,
 	]);
 }

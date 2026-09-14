@@ -38,7 +38,7 @@ export interface EmojiAttributionSource {
 
 const getIsVerified = (guild?: EmojiGuild | null): boolean => {
 	if (!guild) return false;
-	const features = (guild as Guild).features ?? (guild as Guild).features;
+	const features = guild.features;
 	if (!features) return false;
 	if (Array.isArray(features)) {
 		return features.includes('VERIFIED');

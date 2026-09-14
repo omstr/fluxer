@@ -13,8 +13,11 @@ import {EmojiInfoBottomSheet} from '@app/features/emoji/components/bottomsheets/
 import {EmojiPickerPopout} from '@app/features/emoji/components/popouts/EmojiPickerPopout';
 import Emoji from '@app/features/emoji/state/Emoji';
 import type {FlatEmoji} from '@app/features/emoji/types/EmojiTypes';
+import {ExpressionInfoBottomSheet} from '@app/features/expressions/components/bottomsheets/ExpressionInfoBottomSheet';
 import {ExpressionPickerSheet} from '@app/features/expressions/components/modals/ExpressionPickerSheet';
+import ExpressionInfoCardRollout from '@app/features/expressions/state/ExpressionInfoCardRollout';
 import {ADD_REACTION_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
+import {getCachedNumberFormat} from '@app/features/i18n/utils/IntlCache';
 import * as ReactionCommands from '@app/features/messaging/commands/ReactionCommands';
 import {ReactionTooltip} from '@app/features/messaging/components/popouts/ReactionTooltip';
 import {ReactionImage} from '@app/features/messaging/components/ReactionImage';
@@ -82,6 +85,7 @@ const MessageReactionItem = observer(
 		const [selectedEmoji, setSelectedEmoji] = useState<EmojiInfoData | null>(null);
 		const [tooltipHovering, setTooltipHovering] = useState(false);
 		const isMobile = MobileLayout.isMobileLayout();
+		const expressionInfoCardEnabled = ExpressionInfoCardRollout.enabled;
 		useEffect(() => {
 			if (prevCount !== reaction.count) {
 				setPrevCount(reaction.count);
@@ -202,7 +206,7 @@ const MessageReactionItem = observer(
 									transition={{duration: Accessibility.useReducedMotion ? 0 : 0.2}}
 									data-flx="channel.message-reactions.message-reaction-item.div"
 								>
-									{reaction.count}
+									{getCachedNumberFormat(i18n.locale).format(reaction.count)}
 								</motion.div>
 							</AnimatePresence>
 						</div>
@@ -230,12 +234,22 @@ const MessageReactionItem = observer(
 					data-flx="channel.message-reactions.message-reaction-item.long-pressable"
 				>
 					{buttonContent}
-					<EmojiInfoBottomSheet
-						isOpen={emojiInfoOpen}
-						onClose={handleCloseEmojiInfo}
-						emoji={selectedEmoji}
-						data-flx="channel.message-reactions.message-reaction-item.emoji-info-bottom-sheet"
-					/>
+					{expressionInfoCardEnabled ? (
+						<ExpressionInfoBottomSheet
+							kind="emoji"
+							isOpen={emojiInfoOpen}
+							onClose={handleCloseEmojiInfo}
+							emoji={selectedEmoji}
+							data-flx="channel.message-reactions.message-reaction-item.expression-info-bottom-sheet"
+						/>
+					) : (
+						<EmojiInfoBottomSheet
+							isOpen={emojiInfoOpen}
+							onClose={handleCloseEmojiInfo}
+							emoji={selectedEmoji}
+							data-flx="channel.message-reactions.message-reaction-item.emoji-info-bottom-sheet"
+						/>
+					)}
 				</LongPressable>
 			);
 		}

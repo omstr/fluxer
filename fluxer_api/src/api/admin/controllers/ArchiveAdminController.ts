@@ -1,25 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {createGuildID, createUserID} from '@app/api/BrandedTypes';
+import {requireAdminACL, requireAnyAdminACL} from '@app/api/middleware/AdminMiddleware';
+import {RateLimitMiddleware} from '@app/api/middleware/RateLimitMiddleware';
+import {OpenAPI} from '@app/api/middleware/ResponseTypeMiddleware';
+import {RateLimitConfigs} from '@app/api/RateLimitConfig';
+import type {HonoApp} from '@app/api/types/HonoEnv';
+import {Validator} from '@app/api/Validator';
 import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
 import {MissingACLError} from '@fluxer/errors/src/domains/core/MissingACLError';
 import {
-	AdminArchiveCreateRequest,
 	AdminArchiveResponseSchema,
+	type ArchiveSubjectType,
+} from '@fluxer/schema/src/domains/admin/AdminArchiveSchemas';
+import {
+	AdminArchiveCreateRequest,
 	DownloadUrlResponseSchema,
 	GetArchiveResponseSchema,
 	ListArchivesQuery,
 	ListArchivesResponseSchema,
 } from '@fluxer/schema/src/domains/admin/AdminSchemas';
 import {ArchivePathParam, GuildIdParam, UserIdParam} from '@fluxer/schema/src/domains/common/CommonParamSchemas';
-import {createGuildID, createUserID} from '../../BrandedTypes';
-import {requireAdminACL, requireAnyAdminACL} from '../../middleware/AdminMiddleware';
-import {RateLimitMiddleware} from '../../middleware/RateLimitMiddleware';
-import {OpenAPI} from '../../middleware/ResponseTypeMiddleware';
-import {RateLimitConfigs} from '../../RateLimitConfig';
-import type {HonoApp} from '../../types/HonoEnv';
-import {Validator} from '../../Validator';
 
-function canViewArchive(adminAcls: Set<string>, subjectType: 'user' | 'guild'): boolean {
+function canViewArchive(adminAcls: Set<string>, subjectType: ArchiveSubjectType): boolean {
 	if (adminAcls.has(AdminACLs.WILDCARD) || adminAcls.has(AdminACLs.ARCHIVE_VIEW_ALL)) return true;
 	if (subjectType === 'user') return adminAcls.has(AdminACLs.ARCHIVE_TRIGGER_USER);
 	return adminAcls.has(AdminACLs.ARCHIVE_TRIGGER_GUILD);

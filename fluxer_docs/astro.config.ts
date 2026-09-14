@@ -157,7 +157,7 @@ export default defineConfig({
 			sidebar: [
 				{
 					label: 'Reference',
-					items: [{label: 'Introduction', link: '/'}, 'authentication', 'snowflakes', 'conventions'],
+					items: [{label: 'Introduction', link: '/'}, 'authentication', 'snowflakes'],
 				},
 				{
 					label: 'Self-hosting',
@@ -240,7 +240,7 @@ export default defineConfig({
 				},
 				{
 					label: 'Client surfaces',
-					items: ['http-api/themes', 'http-api/downloads'],
+					items: ['http-api/experiments', 'http-api/themes', 'http-api/downloads'],
 				},
 				{
 					label: 'Safety',

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import type {DerivedEndpoints} from './EndpointDerivation';
+import type {DerivedEndpoints} from '@fluxer/config/src/EndpointDerivation';
 
 export type RuntimeEnv = 'development' | 'production' | 'test';
 export type DatabaseBackend = 'postgres' | 'cassandra';
 export type PublicScheme = 'http' | 'https';
+export const CACHE_PURGE_ADAPTER_NAMES = ['none', 'http'] as const;
+export type CachePurgeAdapterName = (typeof CACHE_PURGE_ADAPTER_NAMES)[number];
 
 export interface InstanceBrandingConfig {
 	product_name: string;
@@ -95,6 +97,7 @@ export interface MasterConfig {
 			request_timeout_ms: number;
 			max_inflight_requests: number;
 			ip_ban_exempt_ips: Array<string>;
+			donation_proxy_key: string;
 			desktop_github_redirect_countries: Array<string>;
 			presigned_attachment_uploads_enabled: boolean;
 			presigned_downloads_enabled: boolean;
@@ -117,15 +120,6 @@ export interface MasterConfig {
 				lane?: 'realtime' | 'unfurl' | 'lifecycle' | 'batch';
 				task?: string;
 				enable_cron_scheduler?: boolean;
-				enable_voice_reconciliation?: boolean;
-				voice_reconciliation?: {
-					interval_ms?: number;
-					stagger_delay_ms?: number;
-					lock_ttl_seconds?: number;
-					cadence_ttl_seconds?: number;
-					gateway_only_grace_ms?: number;
-					livekit_only_grace_ms?: number;
-				};
 				lane_concurrency_overrides?: {
 					realtime?: number;
 					unfurl?: number;
@@ -163,12 +157,6 @@ export interface MasterConfig {
 			base_path: string;
 			secret_key_base: string;
 			oauth_client_secret: string;
-		};
-		marketing: {
-			port: number;
-			host: string;
-			base_path: string;
-			secret_key_base: string;
 		};
 		app_proxy: {
 			port: number;
@@ -268,6 +256,7 @@ export interface MasterConfig {
 			secret_key: string;
 			webhook_secret: string;
 			prices?: Record<string, string | undefined>;
+			legacy_prices?: Record<string, Array<string> | undefined>;
 		};
 		ncmec: {
 			enabled: boolean;
@@ -288,10 +277,13 @@ export interface MasterConfig {
 		youtube: {
 			api_key: string;
 		};
-		bunny: {
-			purge_enabled: boolean;
-			api_key: string;
-			pull_zone_id: number;
+		cache_purge: {
+			adapter: CachePurgeAdapterName;
+			http: {
+				endpoint: string;
+				token: string;
+				timeout_ms: number;
+			};
 		};
 		blocklist_feeds: {
 			enabled?: boolean;

@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {requireAdminACL} from '@app/api/middleware/AdminMiddleware';
+import {RateLimitMiddleware} from '@app/api/middleware/RateLimitMiddleware';
+import {OpenAPI} from '@app/api/middleware/ResponseTypeMiddleware';
+import {RateLimitConfigs} from '@app/api/RateLimitConfig';
+import type {HonoApp, HonoEnv} from '@app/api/types/HonoEnv';
+import {Validator} from '@app/api/Validator';
 import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
 import {
 	CreateVoiceRegionRequest,
 	CreateVoiceRegionResponse,
 	CreateVoiceServerRequest,
+	CreateVoiceServerRequestBody,
 	CreateVoiceServerResponse,
 	DeleteVoiceResponse,
 	GetVoiceRegionQuery,
@@ -14,19 +21,15 @@ import {
 	ListVoiceRegionsResponse,
 	ListVoiceServersResponse,
 	UpdateVoiceRegionRequest,
+	UpdateVoiceRegionRequestBody,
 	UpdateVoiceRegionResponse,
 	UpdateVoiceServerRequest,
+	UpdateVoiceServerRequestBody,
 	UpdateVoiceServerResponse,
 	VoiceRegionIdParam,
 	VoiceServerIdParam,
 } from '@fluxer/schema/src/domains/admin/AdminVoiceSchemas';
 import type {Context} from 'hono';
-import {requireAdminACL} from '../../middleware/AdminMiddleware';
-import {RateLimitMiddleware} from '../../middleware/RateLimitMiddleware';
-import {OpenAPI} from '../../middleware/ResponseTypeMiddleware';
-import {RateLimitConfigs} from '../../RateLimitConfig';
-import type {HonoApp, HonoEnv} from '../../types/HonoEnv';
-import {Validator} from '../../Validator';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -117,6 +120,7 @@ export function VoiceAdminController(app: HonoApp) {
 		OpenAPI({
 			operationId: 'update_admin_voice_region',
 			summary: 'Update voice region',
+			requestSchema: UpdateVoiceRegionRequestBody,
 			responseSchema: UpdateVoiceRegionResponse,
 			statusCode: 200,
 			security: 'adminApiKey',
@@ -195,6 +199,7 @@ export function VoiceAdminController(app: HonoApp) {
 		OpenAPI({
 			operationId: 'create_admin_voice_server',
 			summary: 'Create voice server',
+			requestSchema: CreateVoiceServerRequestBody,
 			responseSchema: CreateVoiceServerResponse,
 			statusCode: 200,
 			security: 'adminApiKey',
@@ -247,6 +252,7 @@ export function VoiceAdminController(app: HonoApp) {
 		OpenAPI({
 			operationId: 'update_admin_voice_server',
 			summary: 'Update voice server',
+			requestSchema: UpdateVoiceServerRequestBody,
 			responseSchema: UpdateVoiceServerResponse,
 			statusCode: 200,
 			security: 'adminApiKey',

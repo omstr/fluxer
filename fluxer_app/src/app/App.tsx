@@ -21,6 +21,12 @@ import {useServiceWorkerBadge} from '@app/features/app/hooks/useServiceWorkerBad
 import {useTabKeyFocusGuard} from '@app/features/app/hooks/useTabKeyFocusGuard';
 import {type LayoutVariant, LayoutVariantProvider} from '@app/features/app/state/LayoutVariantContext';
 import RuntimeCrash from '@app/features/app/state/RuntimeCrash';
+import BlockedMessageGroupsRollout, {
+	BLOCKED_MESSAGE_GROUPS_EXPERIMENT_CLASS,
+} from '@app/features/channel/state/BlockedMessageGroupsRollout';
+import MessageHoverTrackingRollout, {
+	MESSAGE_HOVER_TRACKING_EXPERIMENT_CLASS,
+} from '@app/features/channel/state/MessageHoverTrackingRollout';
 import {showMyselfTypingHelper} from '@app/features/devtools/utils/ShowMyselfTypingHelper';
 import GatewayConnection from '@app/features/gateway/transport/GatewayConnection';
 import {AppI18nProvider} from '@app/features/i18n/components/AppI18nProvider';
@@ -39,6 +45,7 @@ import Theme from '@app/features/theme/state/Theme';
 import ThemeLibrary from '@app/features/theme/state/ThemeLibrary';
 import {useThemeStudioBroadcast} from '@app/features/theme_studio/state/ThemeStudioBroadcast';
 import ThemeStudioState from '@app/features/theme_studio/state/ThemeStudioState';
+import TypingPolicy from '@app/features/typing/state/TypingPolicy';
 import {SVGMasks} from '@app/features/ui/components/SVGMasks';
 import FocusRingScope from '@app/features/ui/focus_ring/FocusRingScope';
 import {useTextInputContextMenu} from '@app/features/ui/hooks/useTextInputContextMenu';
@@ -55,7 +62,6 @@ import {VoiceLiveKitRoot} from '@app/features/voice/components/VoiceLiveKitRoot'
 import MediaEngine from '@app/features/voice/engine/MediaEngineFacade';
 import {useElectronScreenSharePicker} from '@app/features/voice/hooks/useElectronScreenSharePicker';
 import {startScreenSharePiPController} from '@app/features/voice/state/ScreenSharePiPController';
-import {startMediaDeviceStartupPreload} from '@app/features/voice/utils/MediaDeviceStartupPreload';
 import {useNativeTitleBar} from '@app/features/window/hooks/useNativeTitleBar';
 import {useStopFlashFrameOnFocus} from '@app/features/window/hooks/useStopFlashFrameOnFocus';
 import {useWindowEventListeners} from '@app/features/window/hooks/useWindowEventListeners';
@@ -120,8 +126,12 @@ export const AppWrapper = observer(({children}: AppWrapperProps) => {
 	const handleSkipLinkFocus = useTabKeyFocusGuard();
 	useInertBackground(ringsContainerRef, hasBlockingModal || topPopoutRequiresBackdrop);
 	useEffect(() => {
+		TypingPolicy.start();
 		showMyselfTypingHelper.start();
-		return () => showMyselfTypingHelper.stop();
+		return () => {
+			showMyselfTypingHelper.stop();
+			TypingPolicy.stop();
+		};
 	}, []);
 	useEffect(
 		() =>
@@ -149,13 +159,14 @@ export const AppWrapper = observer(({children}: AppWrapperProps) => {
 		};
 	}, []);
 	useEffect(() => startScreenSharePiPController(), []);
-	useEffect(() => startMediaDeviceStartupPreload(), []);
 	useServiceWorkerBadge();
 	useKeybindManager(i18n);
 	useDesktopElectronBridges();
 	useDocumentClassToggle('reduced-motion', reducedMotion);
 	useDocumentClassToggle('mobile-layout', MobileLayout.platformMobileDetected || MobileLayout.enabled);
 	useDocumentClassToggle(UNFOCUSED_FULLY_INTERACTIVE_CLASS, stayInteractiveWhenUnfocused);
+	useDocumentClassToggle(MESSAGE_HOVER_TRACKING_EXPERIMENT_CLASS, MessageHoverTrackingRollout.enabled);
+	useDocumentClassToggle(BLOCKED_MESSAGE_GROUPS_EXPERIMENT_CLASS, BlockedMessageGroupsRollout.enabled);
 	useDesktopAllowTransparency(isNative);
 	useWindowEventListeners({preventDocumentScroll: !isNative});
 	useRemScaleTracking();

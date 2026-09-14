@@ -1,12 +1,12 @@
 ---
 # SPDX-License-Identifier: AGPL-3.0-or-later
 title: Admin API keys
-description: Admin API key objects and the five operations that manage them.
+description: Admin API key objects and the operations that manage them.
 ---
 
 import RouteHeader from '@/components/RouteHeader.astro';
 
-An Admin API key is a long-lived credential for the [Admin API](/admin-api/). It authenticates as the account that created it, has its own [ACL](/admin-api/#acl-registry) set, and is honoured only on paths below `/v1/admin`.
+An Admin API key is a long-lived credential for the [Admin API](/admin-api/). It authenticates as the account that created it, has its own [ACL](/admin-api/#acl-registry) set, and authenticates only requests to paths below `/v1/admin`.
 
 Every operation on this page requires `admin_api_key:manage`. None records an Admin audit entry or reads the `X-Audit-Log-Reason` header. An operation that addresses one key returns 404 `ADMIN_API_KEY_NOT_FOUND` when any of these holds:
 
@@ -20,7 +20,7 @@ The wildcard ACL reaches no key created by another account, and such a key repor
 
 ## Admin API key object
 
-A key is owned by the account that created it, and it stores its own ACL set. Narrowing the owner and narrowing the key are separate actions.
+A key is owned by the account that created it, and it stores its own ACL set. Removing an ACL from the owning account and removing an ACL from the key are separate changes.
 
 Fluxer checks both sets when a request presents a key. A request passes when all of these hold:
 
@@ -79,14 +79,14 @@ Only [Create Admin API key](#create-admin-api-key) returns this object. It has t
 | expires_at<sup>2</sup> | ?ISO8601 timestamp | Time the key expires, or null when the key does not expire |
 | acls<sup>3</sup> | array[string] | The [ACLs](/admin-api/#acl-registry) stored on the key |
 
-<sup>1</sup> Has the form `fa_<key_id>_<32 characters>` described by [token formats](/authentication/#token-formats), and is presented as `Admin <token>` in the `Authorization` header
+<sup>1</sup> An opaque key, presented as `Admin <token>` in the [Authorization header](/authentication/#authorization-schemes)
 
 <sup>2</sup> Derived from `expires_in_days` at the instant the key is created, and null when that field is omitted
 
 <sup>3</sup> Reflects the stored set, so a value repeated in the request appears once
 
 :::caution[The secret is returned once]
-Fluxer stores the value as a password hash, so no later operation returns it and none rotates it. A key whose raw value is lost must be revoked and replaced.
+The secret cannot be retrieved or rotated later. If it is lost, revoke the key and create a replacement.
 :::
 
 ### Example
@@ -210,7 +210,7 @@ An update never rotates the credential, and no field on this route changes the e
 
 <sup>1</sup> A value that is empty after trimming is rejected
 
-<sup>2</sup> An empty array leaves the key with no ACLs, the narrowest state short of revocation. An empty request body is accepted and changes nothing
+<sup>2</sup> An empty array leaves the key with no ACLs, so the key satisfies no operation. An empty request body is accepted and changes nothing
 
 ### Response
 

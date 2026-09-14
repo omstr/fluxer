@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {ChannelID, GuildID} from '@app/api/BrandedTypes';
+import type {IGatewayService} from '@app/api/infrastructure/IGatewayService';
+import type {ILiveKitService} from '@app/api/infrastructure/ILiveKitService';
+import type {IVoiceRoomStore} from '@app/api/infrastructure/IVoiceRoomStore';
+import {isDMRoom, parseParticipantMetadataWithRaw, parseRoomName} from '@app/api/infrastructure/VoiceRoomContext';
+import {Logger} from '@app/api/Logger';
+import type {VoiceTopology} from '@app/api/voice/VoiceTopology';
 import type {WebhookEvent} from 'livekit-server-sdk';
 import {WebhookReceiver} from 'livekit-server-sdk';
-import type {ChannelID, GuildID} from '../BrandedTypes';
-import {Logger} from '../Logger';
-import type {VoiceTopology} from '../voice/VoiceTopology';
-import type {IGatewayService} from './IGatewayService';
-import type {ILiveKitService} from './ILiveKitService';
-import type {IVoiceRoomStore} from './IVoiceRoomStore';
-import {isDMRoom, parseParticipantMetadataWithRaw, parseRoomName} from './VoiceRoomContext';
 
 interface VoiceWebhookParticipantContext {
 	readonly type: 'dm' | 'guild';
@@ -185,25 +185,6 @@ export class LiveKitWebhookService {
 				{guildId: context.guildId.toString(), channelId: context.channelId.toString()},
 				'Cleared guild voice room server pinning',
 			);
-			try {
-				const result = await this.gatewayService.disconnectAllVoiceUsersInChannel({
-					guildId: context.guildId,
-					channelId: context.channelId,
-				});
-				Logger.info(
-					{
-						guildId: context.guildId.toString(),
-						channelId: context.channelId.toString(),
-						disconnectedCount: result.disconnectedCount,
-					},
-					'Cleaned up zombie voice connections for finished room',
-				);
-			} catch (error) {
-				Logger.error(
-					{error, guildId: context.guildId.toString(), channelId: context.channelId.toString()},
-					'Failed to clean up voice connections for finished room',
-				);
-			}
 		}
 	}
 

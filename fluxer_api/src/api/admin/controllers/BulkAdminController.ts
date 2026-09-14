@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {UserID} from '@app/api/BrandedTypes';
+import {requireAnyAdminACL} from '@app/api/middleware/AdminMiddleware';
+import {RateLimitMiddleware} from '@app/api/middleware/RateLimitMiddleware';
+import {OpenAPI} from '@app/api/middleware/ResponseTypeMiddleware';
+import {getWorkerService} from '@app/api/middleware/ServiceRegistry';
+import {RateLimitConfigs} from '@app/api/RateLimitConfig';
+import type {HonoApp} from '@app/api/types/HonoEnv';
+import {Validator} from '@app/api/Validator';
 import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
 import {MissingACLError} from '@fluxer/errors/src/domains/core/MissingACLError';
 import {AdminBulkJobCreateRequest, AdminBulkTaskType} from '@fluxer/schema/src/domains/admin/AdminBulkSchemas';
 import {BulkJobResponse} from '@fluxer/schema/src/domains/admin/AdminSchemas';
-import type {UserID} from '../../BrandedTypes';
-import {requireAnyAdminACL} from '../../middleware/AdminMiddleware';
-import {RateLimitMiddleware} from '../../middleware/RateLimitMiddleware';
-import {OpenAPI} from '../../middleware/ResponseTypeMiddleware';
-import {getWorkerService} from '../../middleware/ServiceRegistry';
-import {RateLimitConfigs} from '../../RateLimitConfig';
-import type {HonoApp} from '../../types/HonoEnv';
-import {Validator} from '../../Validator';
 
 const BULK_TASK_ACLS: Record<AdminBulkTaskType, string> = {
 	[AdminBulkTaskType.UPDATE_USER_FLAGS]: AdminACLs.BULK_UPDATE_USER_FLAGS,
@@ -120,7 +120,7 @@ export function BulkAdminController(app: HonoApp) {
 			operationId: 'create_admin_bulk_job',
 			summary: 'Queue a bulk job',
 			description:
-				'Enqueue one background administrative job. The `task` discriminator selects both the body variant and the ACL evaluated for the request: `update_user_flags` needs bulk:update:user_flags, `update_suspicious_activity_flags` needs bulk:update:suspicious_activity, `update_guild_features` needs bulk:update:guild_features, `add_guild_members` needs bulk:add:guild_members, `schedule_user_deletion` needs bulk:delete:users, and `delete_user_messages` needs bulk:delete:user_messages. Returns a job_id immediately; observe progress at /admin/jobs/:job_id. Note: the schedule_user_deletion worker skips Stripe refunds, session termination, and identifier banning — apply those separately for high-risk accounts.',
+				'Enqueue one background administrative job. The `task` discriminator selects both the body variant and the ACL evaluated for the request: `update_user_flags` needs bulk:update:user_flags, `update_suspicious_activity_flags` needs bulk:update:suspicious_activity, `update_guild_features` needs bulk:update:guild_features, `add_guild_members` needs bulk:add:guild_members, `schedule_user_deletion` needs bulk:delete:users, and `delete_user_messages` needs bulk:delete:user_messages. Returns a job_id immediately; observe progress at /admin/jobs/:job_id.',
 			responseSchema: BulkJobResponse,
 			statusCode: 200,
 			security: 'adminApiKey',
