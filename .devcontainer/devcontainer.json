@@ -39,10 +39,9 @@
 		"vscode": {
 			"settings": {
 				"editor.defaultFormatter": "biomejs.biome",
-				"files.watcherExclude": {
-					"**/target/**": true,
-					"**/node_modules/**": true,
-					"**/.git/**": true
+				"erlang.includePaths": ["."],
+				"search.exclude": {
+					"**/_build/default/lib/fluxer_gateway": true
 				}
 			},
 			"extensions": [

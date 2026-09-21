@@ -348,7 +348,7 @@ export function parseChannelJumpLink(url: string): ChannelJumpLink | null {
 
 export function parseMessageJumpLink(url: string): MessageJumpLink | null {
 	const segments = getChannelSegments(url);
-	if (!segments || segments.length !== 4) return null;
+	if (segments?.length !== 4) return null;
 	const [, scope, channelId, messageId] = segments;
 	if (!messageId || !isProbablyAValidSnowflake(messageId)) {
 		return null;

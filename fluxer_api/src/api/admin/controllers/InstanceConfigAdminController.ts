@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {AdminAuditReadActions} from '@app/api/admin/AdminAuditActions';
+import {recordAdminRead, recordAdminWrite} from '@app/api/admin/AdminAuditRecorder';
 import {createUserID} from '@app/api/BrandedTypes';
 import {Config} from '@app/api/Config';
 import {
@@ -29,16 +31,10 @@ import {
 	RegistrationUrlIdParam,
 } from '@fluxer/schema/src/domains/admin/AdminSchemas';
 import {GatewayRolloutConfigSchema} from '@fluxer/schema/src/domains/admin/GatewayRolloutSchemas';
+import {ScreenShareDeliveryConfigSchema} from '@fluxer/schema/src/domains/admin/ScreenShareDeliverySchemas';
 import {VoiceNoiseSuppressionConfigSchema} from '@fluxer/schema/src/domains/admin/VoiceNoiseSuppressionSchemas';
 import {UserIdParam} from '@fluxer/schema/src/domains/common/CommonParamSchemas';
-import {BlockedMessageGroupsConfigSchema} from '@fluxer/schema/src/domains/experiment/BlockedMessageGroupsSchemas';
 import {ExperimentDeliveryConfigSchema} from '@fluxer/schema/src/domains/experiment/ExperimentSchemas';
-import {ExpressionInfoCardConfigSchema} from '@fluxer/schema/src/domains/experiment/ExpressionInfoCardSchemas';
-import {GuildActivityLogPresentationConfigSchema} from '@fluxer/schema/src/domains/experiment/GuildActivityLogPresentationSchemas';
-import {GuildHeaderCollapseConfigSchema} from '@fluxer/schema/src/domains/experiment/GuildHeaderCollapseSchemas';
-import {MessageHoverTrackingConfigSchema} from '@fluxer/schema/src/domains/experiment/MessageHoverTrackingSchemas';
-import {MessageKeyboardFocusConfigSchema} from '@fluxer/schema/src/domains/experiment/MessageKeyboardFocusSchemas';
-import {TypingIndicatorReworkConfigSchema} from '@fluxer/schema/src/domains/experiment/TypingIndicatorReworkSchemas';
 import type {InstanceBranding} from '@fluxer/schema/src/domains/instance/InstanceSchemas';
 import {SmtpEmailProvider} from '@pkgs/email/src/SmtpEmailProvider';
 import type {Context} from 'hono';
@@ -64,14 +60,8 @@ async function buildInstanceConfigResponse(): Promise<InstanceConfigResponse> {
 		ssoConfig,
 		gatewayRollout,
 		voiceNoiseSuppression,
-		guildActivityLogPresentation,
+		screenShareDelivery,
 		experimentDelivery,
-		messageHoverTracking,
-		messageKeyboardFocus,
-		blockedMessageGroups,
-		expressionInfoCard,
-		guildHeaderCollapse,
-		typingIndicatorRework,
 		registrationConfig,
 		registrationUrls,
 		pendingRegistrations,
@@ -79,14 +69,8 @@ async function buildInstanceConfigResponse(): Promise<InstanceConfigResponse> {
 		instanceConfigRepository.getSsoConfig(),
 		instanceConfigRepository.getGatewayRolloutConfig(),
 		instanceConfigRepository.getVoiceNoiseSuppressionConfig(),
-		instanceConfigRepository.getGuildActivityLogPresentationConfig(),
+		instanceConfigRepository.getScreenShareDeliveryConfig(),
 		instanceConfigRepository.getExperimentDeliveryConfig(),
-		instanceConfigRepository.getMessageHoverTrackingConfig(),
-		instanceConfigRepository.getMessageKeyboardFocusConfig(),
-		instanceConfigRepository.getBlockedMessageGroupsConfig(),
-		instanceConfigRepository.getExpressionInfoCardConfig(),
-		instanceConfigRepository.getGuildHeaderCollapseConfig(),
-		instanceConfigRepository.getTypingIndicatorReworkConfig(),
 		instanceConfigRepository.getRegistrationConfig(),
 		instanceConfigRepository.getRegistrationUrlsForAdmin(),
 		instanceConfigRepository.getPendingRegistrations(),
@@ -117,14 +101,8 @@ async function buildInstanceConfigResponse(): Promise<InstanceConfigResponse> {
 		},
 		gateway_rollout: gatewayRollout,
 		voice_noise_suppression: voiceNoiseSuppression,
-		guild_activity_log_presentation: guildActivityLogPresentation,
+		screen_share_delivery: screenShareDelivery,
 		experiment_delivery: experimentDelivery,
-		message_hover_tracking: messageHoverTracking,
-		message_keyboard_focus: messageKeyboardFocus,
-		blocked_message_groups: blockedMessageGroups,
-		expression_info_card: expressionInfoCard,
-		guild_header_collapse: guildHeaderCollapse,
-		typing_indicator_rework: typingIndicatorRework,
 		registration: {
 			...registrationConfig,
 			urls: registrationUrls,
@@ -195,16 +173,25 @@ function completesInitialSetup(data: InstanceConfigUpdateRequest, setupConfigure
 	);
 }
 
-async function grantSetupCompleterAdminACL(ctx: Context<HonoEnv>): Promise<void> {
+async function grantSetupCompleterAdminACL(ctx: Context<HonoEnv>): Promise<boolean> {
 	const user = ctx.get('user');
 	if (!user || ctx.get('authTokenType') !== 'session' || hasAdminAuthenticationACL(user.acls)) {
-		return;
+		return false;
 	}
 	const nextACLs = new Set(user.acls);
 	nextACLs.add(AdminACLs.WILDCARD);
 	const updatedUser = await ctx.get('userRepository').patchUpsert(user.id, {acls: nextACLs}, user.toRow());
 	ctx.set('user', updatedUser);
 	ctx.set('adminUserAcls', updatedUser.acls);
+	return true;
+}
+
+function listSuppliedSections(data: InstanceConfigUpdateRequest): string | undefined {
+	const sections = Object.entries(data)
+		.filter(([, value]) => value != null)
+		.map(([key]) => key)
+		.sort();
+	return sections.length > 0 ? sections.join(',') : undefined;
 }
 
 export function InstanceConfigAdminController(app: HonoApp) {
@@ -224,7 +211,17 @@ export function InstanceConfigAdminController(app: HonoApp) {
 			tags: 'Admin',
 		}),
 		async (ctx) => {
-			return ctx.json(await buildInstanceConfigResponse());
+			const response = await buildInstanceConfigResponse();
+			await recordAdminRead(ctx, {
+				targetType: 'instance_config',
+				targetId: 0n,
+				action: AdminAuditReadActions.GET_INSTANCE_CONFIG,
+				metadata: {
+					registration_url_count: response.registration.urls.length,
+					pending_registration_count: response.registration.pending_registrations.length,
+				},
+			});
+			return ctx.json(response);
 		},
 	);
 	app.patch(
@@ -268,89 +265,16 @@ export function InstanceConfigAdminController(app: HonoApp) {
 					await instanceConfigRepository.setVoiceNoiseSuppressionConfig(validated);
 				}
 			}
-			if (data.guild_activity_log_presentation) {
-				const patch = omitUndefinedFields(data.guild_activity_log_presentation);
+			if (data.screen_share_delivery) {
+				const patch = omitUndefinedFields(data.screen_share_delivery);
 				if (Object.keys(patch).length > 0) {
-					const currentGuildActivityLogPresentation =
-						await instanceConfigRepository.getGuildActivityLogPresentationConfig();
-					const validated = GuildActivityLogPresentationConfigSchema.parse({
-						...currentGuildActivityLogPresentation,
+					const currentScreenShareDelivery = await instanceConfigRepository.getScreenShareDeliveryConfig();
+					const validated = ScreenShareDeliveryConfigSchema.parse({
+						...currentScreenShareDelivery,
 						...patch,
-						config_version: currentGuildActivityLogPresentation.config_version + 1,
+						config_version: currentScreenShareDelivery.config_version + 1,
 					});
-					await instanceConfigRepository.setGuildActivityLogPresentationConfig(validated);
-				}
-			}
-			if (data.message_hover_tracking) {
-				const patch = omitUndefinedFields(data.message_hover_tracking);
-				if (Object.keys(patch).length > 0) {
-					const currentMessageHoverTracking = await instanceConfigRepository.getMessageHoverTrackingConfig();
-					const validated = MessageHoverTrackingConfigSchema.parse({
-						...currentMessageHoverTracking,
-						...patch,
-						config_version: currentMessageHoverTracking.config_version + 1,
-					});
-					await instanceConfigRepository.setMessageHoverTrackingConfig(validated);
-				}
-			}
-			if (data.message_keyboard_focus) {
-				const patch = omitUndefinedFields(data.message_keyboard_focus);
-				if (Object.keys(patch).length > 0) {
-					const currentMessageKeyboardFocus = await instanceConfigRepository.getMessageKeyboardFocusConfig();
-					const validated = MessageKeyboardFocusConfigSchema.parse({
-						...currentMessageKeyboardFocus,
-						...patch,
-						config_version: currentMessageKeyboardFocus.config_version + 1,
-					});
-					await instanceConfigRepository.setMessageKeyboardFocusConfig(validated);
-				}
-			}
-			if (data.blocked_message_groups) {
-				const patch = omitUndefinedFields(data.blocked_message_groups);
-				if (Object.keys(patch).length > 0) {
-					const currentBlockedMessageGroups = await instanceConfigRepository.getBlockedMessageGroupsConfig();
-					const validated = BlockedMessageGroupsConfigSchema.parse({
-						...currentBlockedMessageGroups,
-						...patch,
-						config_version: currentBlockedMessageGroups.config_version + 1,
-					});
-					await instanceConfigRepository.setBlockedMessageGroupsConfig(validated);
-				}
-			}
-			if (data.expression_info_card) {
-				const patch = omitUndefinedFields(data.expression_info_card);
-				if (Object.keys(patch).length > 0) {
-					const currentExpressionInfoCard = await instanceConfigRepository.getExpressionInfoCardConfig();
-					const validated = ExpressionInfoCardConfigSchema.parse({
-						...currentExpressionInfoCard,
-						...patch,
-						config_version: currentExpressionInfoCard.config_version + 1,
-					});
-					await instanceConfigRepository.setExpressionInfoCardConfig(validated);
-				}
-			}
-			if (data.guild_header_collapse) {
-				const patch = omitUndefinedFields(data.guild_header_collapse);
-				if (Object.keys(patch).length > 0) {
-					const currentGuildHeaderCollapse = await instanceConfigRepository.getGuildHeaderCollapseConfig();
-					const validated = GuildHeaderCollapseConfigSchema.parse({
-						...currentGuildHeaderCollapse,
-						...patch,
-						config_version: currentGuildHeaderCollapse.config_version + 1,
-					});
-					await instanceConfigRepository.setGuildHeaderCollapseConfig(validated);
-				}
-			}
-			if (data.typing_indicator_rework) {
-				const patch = omitUndefinedFields(data.typing_indicator_rework);
-				if (Object.keys(patch).length > 0) {
-					const currentTypingIndicatorRework = await instanceConfigRepository.getTypingIndicatorReworkConfig();
-					const validated = TypingIndicatorReworkConfigSchema.parse({
-						...currentTypingIndicatorRework,
-						...patch,
-						config_version: currentTypingIndicatorRework.config_version + 1,
-					});
-					await instanceConfigRepository.setTypingIndicatorReworkConfig(validated);
+					await instanceConfigRepository.setScreenShareDeliveryConfig(validated);
 				}
 			}
 			if (data.experiment_delivery) {
@@ -418,6 +342,11 @@ export function InstanceConfigAdminController(app: HonoApp) {
 								wordmark_url: readOptionalField(data.app_public.branding, 'wordmark_url'),
 								favicon_url: readOptionalField(data.app_public.branding, 'favicon_url'),
 								theme_color: readOptionalField(data.app_public.branding, 'theme_color'),
+								status_page_url: readOptionalField(data.app_public.branding, 'status_page_url'),
+								status_page_incident_history_url: readOptionalField(
+									data.app_public.branding,
+									'status_page_incident_history_url',
+								),
 							})
 						: undefined,
 					legal: data.app_public.legal
@@ -519,10 +448,20 @@ export function InstanceConfigAdminController(app: HonoApp) {
 					}),
 				});
 			}
+			let grantedSetupCompleterAdmin = false;
 			if (shouldGrantSetupCompleterAdmin) {
-				await grantSetupCompleterAdminACL(ctx);
+				grantedSetupCompleterAdmin = await grantSetupCompleterAdminACL(ctx);
 				await instanceConfigRepository.markAdminBootstrapped();
 			}
+			await recordAdminWrite(ctx, {
+				targetType: 'instance_config',
+				targetId: 0n,
+				action: 'update_instance_config',
+				metadata: {
+					sections: listSuppliedSections(data),
+					granted_acls: grantedSetupCompleterAdmin ? AdminACLs.WILDCARD : undefined,
+				},
+			});
 			return ctx.json(await buildInstanceConfigResponse());
 		},
 	);
@@ -553,6 +492,12 @@ export function InstanceConfigAdminController(app: HonoApp) {
 			});
 			const brandingPatch: Partial<InstanceBranding> = {[`${kind}_url`]: prepared.newCdnUrl};
 			await instanceConfigRepository.setAppPublicConfig({branding: brandingPatch});
+			await recordAdminWrite(ctx, {
+				targetType: 'instance_config',
+				targetId: 0n,
+				action: 'upload_branding_asset',
+				metadata: {kind, cleared: prepared.newCdnUrl === null},
+			});
 			return ctx.json(await buildInstanceConfigResponse());
 		},
 	);
@@ -573,6 +518,7 @@ export function InstanceConfigAdminController(app: HonoApp) {
 		}),
 		async (ctx) => {
 			const data = ctx.req.valid('json');
+			let result: InstanceEmailSmtpTestResponse;
 			try {
 				const provider = new SmtpEmailProvider({
 					host: data.host,
@@ -585,10 +531,17 @@ export function InstanceConfigAdminController(app: HonoApp) {
 					socketTimeoutMs: 10000,
 				});
 				await provider.verify();
-				return ctx.json({ok: true, error: null});
+				result = {ok: true, error: null};
 			} catch (error) {
-				return ctx.json({ok: false, error: error instanceof Error ? error.message : String(error)});
+				result = {ok: false, error: error instanceof Error ? error.message : String(error)};
 			}
+			await recordAdminWrite(ctx, {
+				targetType: 'instance_config',
+				targetId: 0n,
+				action: 'test_smtp_connection',
+				metadata: {port: data.port, secure: data.secure, ok: result.ok},
+			});
+			return ctx.json(result);
 		},
 	);
 	app.post(
@@ -615,6 +568,12 @@ export function InstanceConfigAdminController(app: HonoApp) {
 				maxUses: data.max_uses ?? null,
 				approvalRequired: data.approval_required,
 			});
+			await recordAdminWrite(ctx, {
+				targetType: 'registration_url',
+				targetId: 0n,
+				action: 'create_registration_url',
+				metadata: {approval_required: data.approval_required, max_uses: data.max_uses},
+			});
 			return ctx.json({
 				registration_url: created.registrationUrl,
 				code: created.code,
@@ -639,6 +598,11 @@ export function InstanceConfigAdminController(app: HonoApp) {
 		}),
 		async (ctx) => {
 			await instanceConfigRepository.revokeRegistrationUrl(ctx.req.valid('param').registration_url_id);
+			await recordAdminWrite(ctx, {
+				targetType: 'registration_url',
+				targetId: 0n,
+				action: 'revoke_registration_url',
+			});
 			return ctx.json(await buildInstanceConfigResponse());
 		},
 	);
@@ -755,6 +719,12 @@ async function updatePendingRegistrationUser(
 	const userRepository = ctx.get('userRepository');
 	const user = await userRepository.findUnique(createUserID(BigInt(userId)));
 	if (!user) {
+		await recordAdminWrite(ctx, {
+			targetType: 'user',
+			targetId: BigInt(userId),
+			action: decision === 'approve' ? 'approve_registration' : 'reject_registration',
+			metadata: {account_found: false},
+		});
 		return;
 	}
 	const traits = new Set(user.traits);
