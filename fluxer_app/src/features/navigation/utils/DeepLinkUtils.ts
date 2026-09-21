@@ -2,6 +2,8 @@
 
 import {Routes} from '@app/app/Routes';
 import RuntimeConfig from '@app/features/app/state/RuntimeConfig';
+import * as AuthenticationCommands from '@app/features/auth/commands/AuthenticationCommands';
+import { showBrowserLoginHandoffModal } from '@app/features/auth/flow/BrowserLoginHandoffModal';
 import Authentication from '@app/features/auth/state/Authentication';
 import * as GiftCommands from '@app/features/gift/commands/GiftCommands';
 import * as InviteCommands from '@app/features/invite/commands/InviteCommands';
@@ -47,6 +49,9 @@ type DeepLinkTarget =
 	| {
 			type: 'user_settings';
 			target: UserSettingsDeepLinkTarget;
+	  }
+	| {
+			type: 'auth/handoff';
 	  };
 
 function normalizeAppRoutePath(rawUrl: string): string | null {
@@ -99,6 +104,9 @@ export const parseDeepLink = (rawUrl: string): DeepLinkTarget | null => {
 		if (first === 'users' && second) {
 			return {type: 'user', userId: second};
 		}
+		if (first === 'auth' && second === 'handoff') {
+			return {type: 'auth/handoff'};
+		}
 		return null;
 	};
 	const appRoutePath = normalizeAppRoutePath(rawUrl);
@@ -134,6 +142,13 @@ function openUserSettingsDeepLink(target: UserSettingsDeepLinkTarget): void {
 const navigateForTarget = (target: DeepLinkTarget) => {
 	const isAuthenticated = Authentication.isAuthenticated;
 	if (target.type === 'gift' && RuntimeConfig.isSelfHosted()) {
+		return;
+	}
+	if (target.type === 'auth/handoff') {
+		showBrowserLoginHandoffModal(async (payload) => {
+			logger.debug('Desktop handoff flow completed successfully');
+			await AuthenticationCommands.completeLogin(payload);
+		});
 		return;
 	}
 	if (isAuthenticated) {

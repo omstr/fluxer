@@ -28,7 +28,7 @@ const OPEN_PRODUCT_DESCRIPTOR = msg({
 	message: 'Open {productName}',
 	comment: 'Button label that opens the desktop app. productName is the app name.',
 });
-const FAILED_TO_OPEN_IN_DESKTOP_APP_DESCRIPTOR = msg({
+export const FAILED_TO_OPEN_IN_DESKTOP_APP_DESCRIPTOR = msg({
 	message: 'Something went wrong. Try again.',
 	comment: 'Inline error in the web deep-link prompt when opening the desktop app fails.',
 });
