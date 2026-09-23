@@ -3,6 +3,7 @@
 import {requireEmailVerified} from '@app/api/auth/EmailVerificationUtils';
 import {requireSudoMode} from '@app/api/auth/services/SudoVerificationService';
 import {createGuildID} from '@app/api/BrandedTypes';
+import { Config } from '@app/api/Config';
 import {LoginRequired} from '@app/api/middleware/AuthMiddleware';
 import {requireOAuth2ScopeForBearer} from '@app/api/middleware/OAuth2ScopeMiddleware';
 import {RateLimitMiddleware} from '@app/api/middleware/RateLimitMiddleware';
@@ -11,6 +12,9 @@ import {SudoModeMiddleware} from '@app/api/middleware/SudoModeMiddleware';
 import {RateLimitConfigs} from '@app/api/RateLimitConfig';
 import type {HonoApp} from '@app/api/types/HonoEnv';
 import {Validator} from '@app/api/Validator';
+import { AdminACLs } from '@fluxer/constants/src/AdminACLs';
+import { UserFlags } from '@fluxer/constants/src/UserConstants';
+import { MissingAccessError } from '@fluxer/errors/src/domains/core/MissingAccessError';
 import {SingleCommunityCannotCreateGuildsError} from '@fluxer/errors/src/domains/guild/SingleCommunityCannotCreateGuildsError';
 import {SingleCommunityCannotDeleteError} from '@fluxer/errors/src/domains/guild/SingleCommunityCannotDeleteError';
 import {SingleCommunityCannotLeaveError} from '@fluxer/errors/src/domains/guild/SingleCommunityCannotLeaveError';
@@ -55,6 +59,12 @@ export function GuildBaseController(app: HonoApp) {
 			}
 			if (!user.isUnclaimedAccount()) {
 				requireEmailVerified(user, 'guild_creation');
+			}
+			selfHostedBlock: if (Config.instance.selfHosted){
+				if (user.acls.has(AdminACLs.WILDCARD)) break selfHostedBlock;
+				if ((user.flags & UserFlags.CAN_CREATE_GUILD) === 0n){
+					throw new MissingAccessError();
+				}
 			}
 			const auditLogReason = ctx.get('auditLogReason') ?? null;
 			const locale = ctx.get('requestLocale') ?? null;

@@ -17,6 +17,7 @@ pub mod user_flag_bits {
     pub const FRIENDLY_BOT: u64 = 1 << 4;
     pub const FRIENDLY_BOT_MANUAL_APPROVAL: u64 = 1 << 5;
     pub const SPAMMER: u64 = 1 << 6;
+		pub const CAN_CREATE_GUILD: u64 = 1 << 30;
     pub const HIGH_GLOBAL_RATE_LIMIT: u64 = 1 << 33;
     pub const DELETED: u64 = 1 << 34;
     pub const DISABLED_SUSPICIOUS_ACTIVITY: u64 = 1 << 35;
@@ -59,6 +60,10 @@ pub const USER_FLAGS: &[U64Flag] = &[
         name: "SPAMMER",
         value: user_flag_bits::SPAMMER,
     },
+		U64Flag {
+				name: "CAN_CREATE_GUILD",
+				value: user_flag_bits::CAN_CREATE_GUILD,
+		},
     U64Flag {
         name: "HIGH_GLOBAL_RATE_LIMIT",
         value: user_flag_bits::HIGH_GLOBAL_RATE_LIMIT,
