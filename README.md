@@ -1,4 +1,7 @@
 > [!CAUTION]
+> discussion workflow
+
+> [!CAUTION]
 > As of this writing (15 June 2026), we are working to finalise the API and self-hosting documentation over the next few days.
 >
 > We apologise for the brief delay in open-source releases. We paused after spam waves created safety concerns while we built out Fluxer's trust and safety infrastructure. During that same stretch, we have been fixing hundreds of bugs, adding new features, and preparing a much improved audio and video system.
