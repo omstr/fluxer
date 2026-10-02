@@ -19,7 +19,7 @@ on:
         required: true
         default: "14"
 
-permissions: {}
+permissions: { discussions: write, pull-requests: read }
 
 concurrency:
   group: close-linked-discussions-${{ github.event.pull_request.number || github.run_id }}
@@ -33,7 +33,7 @@ jobs:
     steps:
       - name: Close discussions
         env:
-          GH_TOKEN: ${{ secrets.GH_ACTIONS_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -166,7 +166,7 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run || 'true' }}
           DAYS: ${{ inputs.days || '7' }}
-          GH_TOKEN: ${{ secrets.GH_ACTIONS_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
