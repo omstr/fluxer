@@ -1,6 +1,43 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {createHash, randomBytes} from 'node:crypto';
+import type {ApiContext} from '@app/api/ApiContext';
+import * as AuthSession from '@app/api/auth/AuthSession';
+import {assertEmailNotBlocklisted} from '@app/api/auth/EmailBlocklist';
+import {SsoIdentityRepository} from '@app/api/auth/services/SsoIdentityRepository';
+import {
+	parseTokenEndpointResponse,
+	sanitizeSsoRedirectTo,
+	tryDiscoverOidcProviderMetadata,
+} from '@app/api/auth/services/SsoUtils';
+import type {UserID} from '@app/api/BrandedTypes';
+import type {ILogger} from '@app/api/ILogger';
+import {emitActivity} from '@app/api/infrastructure/activity/ActivityEvents';
+import type {IDiscriminatorService} from '@app/api/infrastructure/DiscriminatorService';
+import type {KVActivityTracker} from '@app/api/infrastructure/KVActivityTracker';
+import {
+	type InstanceConfigRepository,
+	type InstanceSsoConfig,
+	REGISTRATION_PENDING_APPROVAL_TRAIT,
+} from '@app/api/instance/InstanceConfigRepository';
+import type {SingleCommunityService} from '@app/api/instance/SingleCommunityService';
+import {
+	deriveSsoRedirectUri,
+	getSsoRequestUrlPolicy,
+	isTestSsoProvider,
+	validateSsoPublicOutboundUrl,
+} from '@app/api/instance/SsoConfigValidation';
+import {Logger} from '@app/api/Logger';
+import {profileSubstringBlocklistCache} from '@app/api/middleware/ProfileSubstringBlocklistCache';
+import type {RequestCache} from '@app/api/middleware/RequestCacheMiddleware';
+import type {User} from '@app/api/models/User';
+import {UserSettings} from '@app/api/models/UserSettings';
+import {EXTERNAL_RESPONSE_LIMITS} from '@app/api/utils/ExternalResponseLimits';
+import * as FetchUtils from '@app/api/utils/FetchUtils';
+import {isJsonRecord, parseJsonRecord, parseJsonWithGuard} from '@app/api/utils/JsonBoundaryUtils';
+import {generateRandomUsername} from '@app/api/utils/UsernameGenerator';
+import {deriveUsernameFromDisplayName} from '@app/api/utils/UsernameSuggestionUtils';
+import {SSO_MOBILE_CALLBACK_URI, SSO_MOBILE_STATE_PREFIX} from '@fluxer/constants/src/SsoConstants';
 import {ProfileFieldPrivacyFlags} from '@fluxer/constants/src/UserConstants';
 import {ValidationErrorCodes} from '@fluxer/constants/src/ValidationErrorCodes';
 import {RegistrationClosedError} from '@fluxer/errors/src/domains/auth/RegistrationClosedError';
@@ -10,6 +47,7 @@ import {ContentBlockedError} from '@fluxer/errors/src/domains/content/ContentBlo
 import {FeatureTemporarilyDisabledError} from '@fluxer/errors/src/domains/core/FeatureTemporarilyDisabledError';
 import {InputValidationError} from '@fluxer/errors/src/domains/core/InputValidationError';
 import {EmailType} from '@fluxer/schema/src/primitives/UserValidators';
+import {formatUrlForDiagnostics} from '@pkgs/http_client/src/HttpClientDiagnostics';
 import {ms, seconds} from 'itty-time';
 import {
 	type CryptoKey,
@@ -22,32 +60,6 @@ import {
 	type JWTPayload,
 	jwtVerify,
 } from 'jose';
-import type {ApiContext} from '../../ApiContext';
-import type {UserID} from '../../BrandedTypes';
-import type {IDiscriminatorService} from '../../infrastructure/DiscriminatorService';
-import type {KVActivityTracker} from '../../infrastructure/KVActivityTracker';
-import {
-	type InstanceConfigRepository,
-	type InstanceSsoConfig,
-	REGISTRATION_PENDING_APPROVAL_TRAIT,
-} from '../../instance/InstanceConfigRepository';
-import {
-	deriveSsoRedirectUri,
-	isTestSsoProvider,
-	validateSsoPublicOutboundUrl,
-} from '../../instance/SsoConfigValidation';
-import {Logger} from '../../Logger';
-import {profileSubstringBlocklistCache} from '../../middleware/ProfileSubstringBlocklistCache';
-import type {User} from '../../models/User';
-import {UserSettings} from '../../models/UserSettings';
-import {EXTERNAL_RESPONSE_LIMITS} from '../../utils/ExternalResponseLimits';
-import * as FetchUtils from '../../utils/FetchUtils';
-import {isJsonRecord, parseJsonRecord, parseJsonWithGuard} from '../../utils/JsonBoundaryUtils';
-import {generateRandomUsername} from '../../utils/UsernameGenerator';
-import {deriveUsernameFromDisplayName} from '../../utils/UsernameSuggestionUtils';
-import * as AuthSession from '../AuthSession';
-import {SsoIdentityRepository} from './SsoIdentityRepository';
-import {parseTokenEndpointResponse, sanitizeSsoRedirectTo, tryDiscoverOidcProviderMetadata} from './SsoUtils';
 
 interface SsoStatePayload {
 	codeVerifier: string;
@@ -97,7 +109,13 @@ interface JwksCacheEntry {
 const CODE_VERIFIER_BYTE_LENGTH = 32;
 const STATE_BYTE_LENGTH = 16;
 const NONCE_BYTE_LENGTH = 16;
-const MOBILE_SSO_REDIRECT_URI = 'fluxer://auth/sso/callback';
+
+let ssoLogger: ILogger | undefined;
+
+function getLogger(): ILogger {
+	ssoLogger ??= Logger.child({logger: 'SsoService'});
+	return ssoLogger;
+}
 
 function randomBase64UrlToken(byteLength: number): string {
 	return randomBytes(byteLength).toString('base64url');
@@ -120,11 +138,10 @@ function buildDiscoveryCacheKey(issuer: string): string {
 	return `sso:oidc-discovery:${key}`;
 }
 
-function resolveSsoRedirectUri(requestedRedirectUri: string | undefined, defaultRedirectUri: string): string {
-	if (!requestedRedirectUri) return defaultRedirectUri;
-	const trimmed = requestedRedirectUri.trim();
-	if (!trimmed) return defaultRedirectUri;
-	if (trimmed === defaultRedirectUri || trimmed === MOBILE_SSO_REDIRECT_URI) return trimmed;
+function isMobileSsoRedirectUri(requestedRedirectUri: string | undefined, defaultRedirectUri: string): boolean {
+	const trimmed = requestedRedirectUri?.trim();
+	if (!trimmed || trimmed === defaultRedirectUri) return false;
+	if (trimmed === SSO_MOBILE_CALLBACK_URI) return true;
 	throw InputValidationError.fromCode('redirect_uri', ValidationErrorCodes.INVALID_URL_FORMAT);
 }
 
@@ -224,7 +241,7 @@ function resolveEmailVerified({
 	if (values.includes(false)) {
 		return false;
 	}
-	return values.includes(true);
+	return values.length > 0 && values.includes(true);
 }
 
 function isJsonWebKeySet(value: unknown): value is JSONWebKeySet {
@@ -234,7 +251,6 @@ function isJsonWebKeySet(value: unknown): value is JSONWebKeySet {
 }
 
 export class SsoService {
-	private readonly logger = Logger.child({logger: 'SsoService'});
 	private static readonly STATE_TTL_SECONDS = seconds('10 minutes');
 	private static readonly DISCOVERY_TTL_SECONDS = seconds('1 hour');
 	private static readonly JWKS_CACHE_TTL_MS = ms('1 hour');
@@ -246,6 +262,7 @@ export class SsoService {
 		private readonly instanceConfigRepository: InstanceConfigRepository,
 		private readonly discriminatorService: IDiscriminatorService,
 		private readonly kvActivityTracker: KVActivityTracker,
+		private readonly singleCommunityService: SingleCommunityService,
 	) {}
 
 	async getPublicStatus(): Promise<PublicSsoStatus> {
@@ -270,16 +287,16 @@ export class SsoService {
 		redirect_uri: string;
 	}> {
 		const config = await this.requireReadyConfig();
-		const state = randomHexToken(STATE_BYTE_LENGTH);
+		const isMobile = isMobileSsoRedirectUri(redirectUri, config.redirectUri);
+		const state = `${isMobile ? SSO_MOBILE_STATE_PREFIX : ''}${randomHexToken(STATE_BYTE_LENGTH)}`;
 		const codeVerifier = randomBase64UrlToken(CODE_VERIFIER_BYTE_LENGTH);
 		const codeChallenge = buildCodeChallenge(codeVerifier);
 		const nonce = randomBase64UrlToken(NONCE_BYTE_LENGTH);
-		const ssoRedirectUri = resolveSsoRedirectUri(redirectUri, config.redirectUri);
 		const statePayload: SsoStatePayload = {
 			codeVerifier,
 			nonce,
 			redirectTo: sanitizeSsoRedirectTo(redirectTo),
-			redirectUri: ssoRedirectUri,
+			redirectUri: config.redirectUri,
 			createdAt: Date.now(),
 		};
 		const {cache} = this.apiContext.services;
@@ -287,7 +304,7 @@ export class SsoService {
 		const searchParams = new URLSearchParams({
 			response_type: 'code',
 			client_id: config.clientId ?? '',
-			redirect_uri: ssoRedirectUri,
+			redirect_uri: config.redirectUri,
 			scope: config.scope,
 			state,
 			code_challenge: codeChallenge,
@@ -309,10 +326,20 @@ export class SsoService {
 				throw new FeatureTemporarilyDisabledError();
 			}
 		}
-		return {authorization_url: authorizationUrlString, state, redirect_uri: ssoRedirectUri};
+		return {authorization_url: authorizationUrlString, state, redirect_uri: config.redirectUri};
 	}
 
-	async completeLogin({code, state, request}: {code: string; state: string; request: Request}): Promise<{
+	async completeLogin({
+		code,
+		state,
+		request,
+		requestCache,
+	}: {
+		code: string;
+		state: string;
+		request: Request;
+		requestCache: RequestCache;
+	}): Promise<{
 		token: string;
 		user_id: string;
 		redirect_to: string;
@@ -330,22 +357,29 @@ export class SsoService {
 			config,
 		});
 		const claims = await this.resolveClaims(tokenResponse, config, statePayload.nonce);
-		const user = await this.resolveUserFromClaims(claims, config);
-		const [token] = await AuthSession.createAuthSession(this.apiContext, {user, request});
+		const user = await this.resolveUserFromClaims(claims, config, requestCache);
+		const [token] = await AuthSession.createAuthSession(this.apiContext, {
+			user,
+			origin: AuthSession.resolveSessionOrigin(this.apiContext, request),
+		});
 		return {token, user_id: user.id.toString(), redirect_to: statePayload.redirectTo ?? ''};
 	}
 
-	private async resolveUserFromClaims(claims: ResolvedSsoClaims, config: ResolvedSsoConfig): Promise<User> {
+	private async resolveUserFromClaims(
+		claims: ResolvedSsoClaims,
+		config: ResolvedSsoConfig,
+		requestCache: RequestCache,
+	): Promise<User> {
 		if (!claims.emailVerified) {
 			throw InputValidationError.fromCode('email_verified', ValidationErrorCodes.INVALID_SSO_TOKEN);
 		}
 		const emailLower = claims.email.toLowerCase();
-		this.logger.info({email: emailLower, has_sub: true}, 'SSO login with sub claim');
+		getLogger().info({email: emailLower, has_sub: true}, 'SSO login with sub claim');
 		const identityUserId = await this.ssoIdentityRepository.findUserId(config.providerId, claims.sub);
 		if (identityUserId) {
 			const user = await this.apiContext.services.users.findUnique(identityUserId);
 			if (!user) {
-				this.logger.error(
+				getLogger().error(
 					{user_id: identityUserId.toString()},
 					'SSO identity mapping points at a missing user; refusing reassignment',
 				);
@@ -365,21 +399,13 @@ export class SsoService {
 		if (registrationConfig.mode === 'closed') {
 			throw new RegistrationClosedError();
 		}
+		await assertEmailNotBlocklisted(emailLower, 'email');
 		const pendingApproval = registrationConfig.mode === 'approval';
 		const user = await this.provisionUserFromClaims(claims, config, {pendingApproval});
 		if (pendingApproval) {
-			await this.instanceConfigRepository.addPendingRegistration({
-				user_id: user.id.toString(),
-				username: user.username,
-				discriminator: user.discriminator,
-				global_name: user.globalName,
-				email: user.email,
-				requested_at: new Date().toISOString(),
-				registration_url_id: null,
-				client_ip: null,
-			});
 			throw new RegistrationPendingApprovalError();
 		}
+		await this.singleCommunityService.joinStockCommunity(user.id, requestCache);
 		return user;
 	}
 
@@ -397,7 +423,7 @@ export class SsoService {
 		if (ownerId?.toString() === userId.toString()) {
 			return;
 		}
-		this.logger.error(
+		getLogger().error(
 			{user_id: userId.toString(), owner_user_id: ownerId?.toString() ?? null},
 			'SSO identity is already linked to another account',
 		);
@@ -409,7 +435,7 @@ export class SsoService {
 		const traits = user.traits;
 		const existingIdentities = Array.from(traits).filter((trait) => trait.startsWith('sso_identity:'));
 		if (existingIdentities.length > 0 && !traits.has(identityTrait)) {
-			this.logger.error({user_id: user.id.toString()}, 'SSO identity claim did not match linked account');
+			getLogger().error({user_id: user.id.toString()}, 'SSO identity claim did not match linked account');
 			throw InputValidationError.fromCode('sub', ValidationErrorCodes.SSO_IDENTITY_MISMATCH);
 		}
 		await this.claimSsoIdentity(user.id, sub, config);
@@ -466,7 +492,6 @@ export class SsoService {
 			email: claims.email.toLowerCase(),
 			email_verified: claims.emailVerified,
 			email_bounced: false,
-			phone: null,
 			password_hash: null,
 			password_last_changed_at: null,
 			totp_secret: null,
@@ -494,7 +519,6 @@ export class SsoService {
 			stripe_subscription_id: null,
 			stripe_customer_id: null,
 			has_ever_purchased: false,
-			suspicious_activity_flags: 0,
 			terms_agreed_at: now,
 			privacy_agreed_at: now,
 			last_active_at: now,
@@ -518,8 +542,22 @@ export class SsoService {
 			version: 1,
 		} as const;
 		await this.claimSsoIdentity(userId, claims.sub, config);
+		let createAttempted = false;
 		let userCreated = false;
 		try {
+			if (options?.pendingApproval) {
+				await this.instanceConfigRepository.addPendingRegistration({
+					user_id: userId.toString(),
+					username,
+					discriminator: discriminatorResult.discriminator,
+					global_name: globalName,
+					email: userRow.email,
+					requested_at: now.toISOString(),
+					registration_url_id: null,
+					client_ip: null,
+				});
+			}
+			createAttempted = true;
 			const user = await users.create(userRow);
 			userCreated = true;
 			await users.upsertSettings(
@@ -529,13 +567,43 @@ export class SsoService {
 					isAdult: true,
 				}),
 			);
-			await this.kvActivityTracker.updateActivity(user.id, now);
+			void this.kvActivityTracker.updateActivity(user.id, now).catch((error: unknown) => {
+				getLogger().warn({error, userId: user.id}, 'Failed to update real-time user activity');
+			});
+			await emitActivity(
+				'registration',
+				user.id.toString(),
+				{
+					user_id: user.id.toString(),
+					method: 'oauth',
+					email: user.email,
+					username: user.username,
+					username_user_chosen: false,
+					global_name: user.globalName,
+					locale: user.locale,
+					timezone: null,
+					invite_code: null,
+					flags: user.flags.toString(),
+				},
+				null,
+				user.id.toString(),
+			);
 			return user;
 		} catch (error) {
 			if (!userCreated) {
 				await this.ssoIdentityRepository.releaseIdentity(config.providerId, claims.sub).catch((releaseError) => {
-					this.logger.error({releaseError}, 'Failed to release SSO identity after user provisioning failed');
+					getLogger().error({releaseError}, 'Failed to release SSO identity after user provisioning failed');
 				});
+				if (options?.pendingApproval && !createAttempted) {
+					await this.instanceConfigRepository
+						.removePendingRegistration(userId.toString())
+						.catch((removeError: unknown) => {
+							getLogger().error(
+								{userId: userId.toString(), removeError},
+								'Failed to withdraw the pending approval of an SSO user that was never created',
+							);
+						});
+				}
 			}
 			throw error;
 		}
@@ -561,7 +629,7 @@ export class SsoService {
 		let claims: JWTPayload | null = null;
 		if (tokenResponse.id_token) {
 			if (!config.jwksUrl) {
-				this.logger.warn('SSO id_token returned but no JWKS URL is configured; ignoring id_token claims');
+				getLogger().warn('SSO id_token returned but no JWKS URL is configured; ignoring id_token claims');
 			} else {
 				claims = await this.verifyIdToken(tokenResponse.id_token, config, expectedNonce);
 			}
@@ -574,7 +642,7 @@ export class SsoService {
 		const userInfoSub = userInfo ? readStringClaim(userInfo, 'sub') : undefined;
 		if (claims && userInfo) {
 			if (!idTokenSub || !userInfoSub || idTokenSub !== userInfoSub) {
-				this.logger.error('SSO sub mismatch between id_token and userinfo');
+				getLogger().error('SSO sub mismatch between id_token and userinfo');
 				throw InputValidationError.fromCode('sub', ValidationErrorCodes.SSO_IDENTITY_MISMATCH);
 			}
 		}
@@ -591,7 +659,7 @@ export class SsoService {
 		const normalizedIdTokenEmail = idTokenEmail ? normalizeSsoEmail(idTokenEmail) : undefined;
 		const normalizedUserInfoEmail = userInfoEmail ? normalizeSsoEmail(userInfoEmail) : undefined;
 		if (normalizedIdTokenEmail && normalizedUserInfoEmail && normalizedIdTokenEmail !== normalizedUserInfoEmail) {
-			this.logger.error('SSO email mismatch between id_token and userinfo');
+			getLogger().error('SSO email mismatch between id_token and userinfo');
 			throw InputValidationError.fromCode('email', ValidationErrorCodes.SSO_IDENTITY_MISMATCH);
 		}
 		const email =
@@ -628,7 +696,7 @@ export class SsoService {
 				});
 				const nonce = payload['nonce'];
 				if (nonce === undefined) {
-					this.logger.warn('SSO id_token missing required nonce claim');
+					getLogger().warn('SSO id_token missing required nonce claim');
 					throw new Error('nonce missing');
 				}
 				if (typeof nonce !== 'string' || nonce.length === 0 || nonce !== expectedNonce) {
@@ -638,7 +706,7 @@ export class SsoService {
 			}
 			return decodeJwt(idToken);
 		} catch (error) {
-			this.logger.error({error}, 'Failed to verify SSO id_token');
+			getLogger().error({error}, 'Failed to verify SSO id_token');
 			throw InputValidationError.fromCode('id_token', ValidationErrorCodes.INVALID_SSO_TOKEN);
 		}
 	}
@@ -651,14 +719,18 @@ export class SsoService {
 			return cached.jwks;
 		}
 		const fetchJwks = async (): Promise<JSONWebKeySet> => {
-			const response = await FetchUtils.sendRequest({
-				url: jwksUrl,
-				method: 'GET',
-				headers: {Accept: 'application/json'},
-				timeout: ms('5 seconds'),
-				serviceName: 'sso_jwks',
-			});
+			const response = await FetchUtils.sendRequest(
+				{
+					url: jwksUrl,
+					method: 'GET',
+					headers: {Accept: 'application/json'},
+					timeout: ms('5 seconds'),
+					serviceName: 'sso_jwks',
+				},
+				{requestUrlPolicy: getSsoRequestUrlPolicy()},
+			);
 			if (response.status < 200 || response.status >= 300) {
+				FetchUtils.discardResponseBody(response.stream, response.status);
 				throw new Error(`Failed to fetch JWKS: HTTP ${response.status}`);
 			}
 			const rawBody = await FetchUtils.streamToStringWithLimit(response.stream, {
@@ -744,17 +816,21 @@ export class SsoService {
 	}
 
 	private async fetchUserInfo(userInfoUrl: string, accessToken: string): Promise<Record<string, unknown>> {
-		const resp = await FetchUtils.sendRequest({
-			url: userInfoUrl,
-			method: 'GET',
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-				Accept: 'application/json',
+		const resp = await FetchUtils.sendRequest(
+			{
+				url: userInfoUrl,
+				method: 'GET',
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					Accept: 'application/json',
+				},
+				timeout: ms('15 seconds'),
+				serviceName: 'sso_user_info',
 			},
-			timeout: ms('15 seconds'),
-			serviceName: 'sso_user_info',
-		});
+			{requestUrlPolicy: getSsoRequestUrlPolicy()},
+		);
 		if (resp.status < 200 || resp.status >= 300) {
+			FetchUtils.discardResponseBody(resp.stream, resp.status);
 			throw InputValidationError.fromCode('access_token', ValidationErrorCodes.FAILED_TO_FETCH_SSO_USER_INFO);
 		}
 		try {
@@ -805,15 +881,19 @@ export class SsoService {
 			Accept: 'application/json',
 			'Content-Type': 'application/x-www-form-urlencoded',
 		};
-		const resp = await FetchUtils.sendRequest({
-			url: config.tokenUrl ?? '',
-			method: 'POST',
-			headers,
-			body,
-			timeout: ms('15 seconds'),
-			serviceName: 'sso_token_exchange',
-		});
+		const resp = await FetchUtils.sendRequest(
+			{
+				url: config.tokenUrl ?? '',
+				method: 'POST',
+				headers,
+				body,
+				timeout: ms('15 seconds'),
+				serviceName: 'sso_token_exchange',
+			},
+			{requestUrlPolicy: getSsoRequestUrlPolicy()},
+		);
 		if (resp.status < 200 || resp.status >= 300) {
+			FetchUtils.discardResponseBody(resp.stream, resp.status);
 			throw InputValidationError.fromCode('code', ValidationErrorCodes.INVALID_SSO_AUTHORIZATION_CODE);
 		}
 		const rawBody = await FetchUtils.streamToStringWithLimit(resp.stream, {
@@ -904,7 +984,10 @@ export class SsoService {
 		try {
 			return await this.assertPublicOutboundUrl(rawUrl, fieldName);
 		} catch (error) {
-			this.logger.warn({fieldName, rawUrl, error}, 'Ignoring SSO URL that failed outbound policy validation');
+			getLogger().warn(
+				{fieldName, rawUrl: formatUrlForDiagnostics(rawUrl), error},
+				'Ignoring SSO URL that failed outbound policy validation',
+			);
 			return null;
 		}
 	}

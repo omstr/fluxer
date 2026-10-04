@@ -10,27 +10,26 @@
 	"main": "dist/main/index.js",
 	"scripts": {
 		"build": "node scripts/build.mjs",
-		"set-channel": "cargo run --manifest-path ../tools/ci/Cargo.toml -- build-desktop --step set_build_channel",
-		"test": "cargo test --manifest-path native/rust/Cargo.toml",
-		"typecheck": "tsgo --noEmit",
-		"test:native-media": "node scripts/native-media-integration.mjs",
-		"test:native-media:strict": "node scripts/native-media-integration.mjs --strict"
+		"set-channel": "../tools/ci/run.sh build-desktop --step set_build_channel",
+		"test": "pnpm test:main && cargo test --manifest-path native/rust/Cargo.toml",
+		"test:main": "node --test 'src/main/*.test.mjs'",
+		"typecheck": "pnpm set-channel && tsc --noEmit"
 	},
 	"dependencies": {
 		"@fluxer/voice_engine_v2": "workspace:*",
-		"@simplewebauthn/browser": "13.2.2",
+		"@simplewebauthn/browser": "14.0.0",
 		"franc-min": "6.2.0",
 		"hunspell-asm": "4.0.2",
-		"update-electron-app": "3.1.2",
-		"velopack": "0.0.1298"
+		"update-electron-app": "3.3.0",
+		"velopack": "1.2.0"
 	},
 	"devDependencies": {
-		"@types/node": "24.10.9",
-		"@typescript/native-preview": "7.0.0-dev.20260130.1",
-		"electron": "41.2.2",
-		"electron-builder": "26.9.0",
-		"esbuild": "0.27.2",
-		"typescript": "5.9.3"
+		"@types/node": "24.13.5",
+		"electron": "44.4.1",
+		"electron-builder": "27.0.0-alpha.8",
+		"electron-builder-squirrel-windows": "27.0.0-alpha.8",
+		"esbuild": "catalog:",
+		"typescript": "catalog:ts7"
 	},
 	"knip": {
 		"ignoreDependencies": [
@@ -38,6 +37,7 @@
 		]
 	},
 	"optionalDependencies": {
+		"@fluxer/hardware-encoder": "file:./native/hardware-encoder",
 		"@fluxer/linux-audio-capture": "file:./native/linux-audio-capture",
 		"@fluxer/linux-evdev": "file:./native/linux-evdev",
 		"@fluxer/linux-input-hook": "file:./native/linux-input-hook",
@@ -53,14 +53,12 @@
 		"@fluxer/platform-info": "file:./native/platform-info",
 		"@fluxer/system-hunspell": "file:./native/system-hunspell",
 		"@fluxer/webauthn": "file:./native/webauthn",
-		"@fluxer/webrtc-sender": "file:./native/webrtc-sender",
 		"@fluxer/win-clipboard": "file:./native/win-clipboard",
 		"@fluxer/win-shell": "file:./native/win-shell",
 		"@fluxer/win-toast": "file:./native/win-toast",
 		"@fluxer/win-game-capture": "file:./native/win-game-capture",
 		"@fluxer/win-process-loopback": "file:./native/win-process-loopback",
 		"@fluxer/windows-input-hook": "file:./native/windows-input-hook",
-		"electron-log": "5.4.3",
-		"node-mac-permissions": "2.5.0"
+		"electron-log": "5.4.4"
 	}
 }

@@ -112,6 +112,10 @@
 	user-select: none;
 }
 
+.inputGroupDisabled .input {
+	cursor: not-allowed;
+}
+
 .inputDefault {
 	font-size: 0.875rem;
 	line-height: 1.25rem;
@@ -290,6 +294,7 @@
 }
 
 .popup {
+	--scroller-track-size-override: 0.25rem;
 	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
@@ -320,21 +325,30 @@
 }
 
 .listScroller {
-	--scroller-track-size: 0.375rem;
+	--combobox-list-padding-block: 0.25rem;
+	--combobox-list-gap: 0.0625rem;
+	--scroller-track-size-override: initial;
 	max-height: inherit;
 	min-height: 0;
+	scroll-padding-block: var(--combobox-list-padding-block);
 }
 
 .listScrollerContent {
-	padding-inline-end: var(--scroller-track-size);
+	min-width: 0;
 }
 
 .list {
 	display: flex;
 	flex-direction: column;
-	gap: 0.0625rem;
+	gap: var(--combobox-list-gap);
 	min-height: 0;
-	padding: 0.25rem;
+	padding: var(--combobox-list-padding-block) 0.25rem 0;
+}
+
+.list:not([data-empty])::after {
+	content: '';
+	flex: 0 0 auto;
+	height: calc(var(--combobox-list-padding-block) - var(--combobox-list-gap));
 }
 
 .emptyState {
@@ -451,6 +465,9 @@
 .itemRendered .itemText {
 	box-sizing: border-box;
 	width: 100%;
+}
+
+.itemRendered:has(.itemIndicator:not(.itemIndicatorHidden)) .itemText {
 	padding-inline-end: 1.5rem;
 }
 

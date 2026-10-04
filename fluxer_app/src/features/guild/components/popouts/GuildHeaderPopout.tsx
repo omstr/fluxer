@@ -63,6 +63,11 @@ const EDIT_COMMUNITY_PROFILE_DESCRIPTOR = msg({
 	message: 'Edit community profile',
 	comment: 'Button or menu action label in the guild header popout. Keep it concise.',
 });
+const releaseHoverFocus = (event: React.MouseEvent<HTMLElement>) => {
+	const item = event.currentTarget;
+	if (document.activeElement !== item) return;
+	item.closest<HTMLElement>('[role="menu"]')?.focus();
+};
 export const GuildHeaderPopoutItem = observer(
 	(props: {title: string; icon: Icon; onClick?: () => void; danger?: boolean}) => {
 		const handleSelect = useCallback(() => {
@@ -80,6 +85,7 @@ export const GuildHeaderPopoutItem = observer(
 					className={clsx(styles.itemButton, props.danger && styles.itemDanger)}
 					onClick={handleSelect}
 					onMouseEnter={handleMouseEnter}
+					onMouseLeave={releaseHoverFocus}
 					data-roving-focus="true"
 					data-flx="guild.guild-header-popout.guild-header-popout-item.item-button.select"
 				>
@@ -113,6 +119,7 @@ export const GuildHeaderPopoutCheckboxItem = observer(
 					onMouseEnter={(event) => {
 						event.currentTarget.focus();
 					}}
+					onMouseLeave={releaseHoverFocus}
 					onClick={handleClick}
 					onKeyDown={(e) => {
 						if (isKeyboardActivationKey(e.key)) {
@@ -171,11 +178,11 @@ export const GuildHeaderPopout = observer(({guild}: {guild: Guild}) => {
 		canCreateExpressions ||
 		canBanMembers;
 	const canEditCommunityProfile = Users.getCurrentUser()?.isClaimed() ?? true;
-	const settings = UserGuildSettings.getSettings(guild.id);
+	const settings = UserGuildSettings.getSettingsForScope(guild.id);
 	const hideMutedChannels = settings?.hide_muted_channels ?? false;
 	const handleToggleHideMutedChannels = useCallback(
 		(checked: boolean) => {
-			const currentSettings = UserGuildSettings.getSettings(guild.id);
+			const currentSettings = UserGuildSettings.getSettingsForScope(guild.id);
 			const currentValue = currentSettings?.hide_muted_channels ?? false;
 			if (checked === currentValue) return;
 			UserGuildSettingsCommands.toggleHideMutedChannels(guild.id);

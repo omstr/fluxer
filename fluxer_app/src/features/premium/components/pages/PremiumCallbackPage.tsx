@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {PRODUCT_NAME} from '@app/features/app/config/I18nDisplayConstants';
-import RuntimeConfig from '@app/features/app/state/RuntimeConfig';
 import {useLocation} from '@app/features/platform/components/router/RouterReact';
 import * as PremiumCommands from '@app/features/premium/commands/PremiumCommands';
 import styles from '@app/features/premium/components/pages/PremiumCallbackPage.module.css';
+import {shouldShowPremiumFeatures} from '@app/features/premium/utils/PremiumUtils';
 import {Spinner} from '@app/features/ui/components/Spinner';
 import {msg} from '@lingui/core/macro';
 import {Trans, useLingui} from '@lingui/react/macro';
@@ -21,19 +21,19 @@ type PreapprovalState =
 
 const CARD_COUNTRY_MISMATCH_WITH_COUNTRY_DESCRIPTOR = msg({
 	message:
-		'Stripe reported a card issued in {countryName}. To pay in this localized currency, use a card issued in your billing country, choose another payment method, or return to {productName} and switch to the standard price.',
+		'Stripe reported a card issued in {countryName}. To pay in this localized currency, use a card issued in your billing country, or return to {productName} and choose another payment method.',
 	comment:
 		'Premium checkout error shown when card country does not match billing country. productName is the app name.',
 });
 const CARD_COUNTRY_MISMATCH_DESCRIPTOR = msg({
 	message:
-		'This card does not match your billing country, so it cannot be used for this localized currency. Use a local card, choose another payment method, or return to {productName} and switch to the standard price.',
+		'This card does not match your billing country, so it cannot be used for this localized currency. Use a local card, or return to {productName} and choose another payment method.',
 	comment:
 		'Premium checkout error shown when card country does not match billing country and Stripe did not provide the issuing country. productName is the app name.',
 });
 const CARD_PREAPPROVAL_FAILED_DESCRIPTOR = msg({
 	message:
-		'Stripe could not verify this card for localized pricing. Use another card or return to {productName} and choose another payment method or the standard price.',
+		'Stripe could not verify this card for localized pricing. Use another card, or return to {productName} and choose another payment method.',
 	comment:
 		'Premium checkout error shown when Stripe cannot verify a card for localized pricing. productName is the app name.',
 });
@@ -53,7 +53,7 @@ const PremiumCallbackPage = observer(() => {
 	const token = queryParams.get('token');
 	const [preapprovalState, setPreapprovalState] = useState<PreapprovalState>({status: 'pending'});
 	useEffect(() => {
-		if (RuntimeConfig.isSelfHosted()) {
+		if (!shouldShowPremiumFeatures()) {
 			window.location.replace('/');
 		}
 	}, []);
@@ -109,7 +109,7 @@ const PremiumCallbackPage = observer(() => {
 			}
 		};
 	}, [status, token]);
-	if (RuntimeConfig.isSelfHosted()) {
+	if (!shouldShowPremiumFeatures()) {
 		return null;
 	}
 	const isSuccess = status === 'success';

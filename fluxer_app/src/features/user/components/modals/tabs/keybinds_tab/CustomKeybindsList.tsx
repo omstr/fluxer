@@ -2,6 +2,8 @@
 
 import {ConfirmModal} from '@app/features/app/components/dialogs/ConfirmModal';
 import Keybind from '@app/features/input/state/InputKeybind';
+import {isBuiltinDisableMarker} from '@app/features/input/state/KeybindResolution';
+import {remFromPx} from '@app/features/theme/layout/RemFromPx';
 import {RetryIcon} from '@app/features/ui/action_menu/ContextMenuIcons';
 import {Button} from '@app/features/ui/button/Button';
 import * as ModalCommands from '@app/features/ui/commands/ModalCommands';
@@ -50,13 +52,17 @@ const CUSTOM_SHORTCUTS_DESCRIPTOR = msg({
 	message: 'Custom shortcuts',
 	comment: 'Short heading in the keybinds tab.',
 });
-const RECORDING_PAUSES_SHORTCUTS_DESCRIPTOR = msg({
-	message: 'Recording pauses shortcuts.',
+const SHORTCUTS_ARE_PAUSED_WHILE_RECORDING_DESCRIPTOR = msg({
+	message: 'Shortcuts are paused while recording.',
 	comment: 'Short helper text in the keybinds tab.',
 });
 export const CustomKeybindsList: React.FC<{searchQuery: string}> = observer(({searchQuery}) => {
 	const {i18n} = useLingui();
-	const customKeybinds = Keybind.getCustomKeybinds();
+	const allCustomKeybinds = Keybind.getCustomKeybinds();
+	const customKeybinds = useMemo(
+		() => allCustomKeybinds.filter((entry) => !isBuiltinDisableMarker(entry)),
+		[allCustomKeybinds],
+	);
 	const syncAcrossDevices = Keybind.getSyncAcrossDevices();
 	const disableBuiltinKeybinds = Keybind.getDisableBuiltinKeybinds();
 	const labelByAction = getCustomKeybindActionLabelMap(i18n, Keybind.getDefaults());
@@ -66,9 +72,9 @@ export const CustomKeybindsList: React.FC<{searchQuery: string}> = observer(({se
 		return customKeybinds.filter((entry) => {
 			const label = entry.action ? (labelByAction.get(entry.action) ?? entry.action) : '';
 			if (label.toLowerCase().includes(normalized)) return true;
-			return comboMatchesQuery(entry.combo, normalized);
+			return comboMatchesQuery(i18n, entry.combo, normalized);
 		});
-	}, [customKeybinds, labelByAction, normalized]);
+	}, [customKeybinds, labelByAction, normalized, i18n, i18n.locale]);
 	const conflictLabels = useMemo(() => {
 		const result = new Map<string, string>();
 		for (let i = 0; i < customKeybinds.length; i++) {
@@ -109,7 +115,7 @@ export const CustomKeybindsList: React.FC<{searchQuery: string}> = observer(({se
 			)),
 		);
 	};
-	const hasAnyOverrides = customKeybinds.length > 0 || disableBuiltinKeybinds;
+	const hasAnyOverrides = allCustomKeybinds.length > 0 || disableBuiltinKeybinds;
 	return (
 		<div className={styles.customSection} data-flx="user.keybinds-tab.custom-keybinds-list.custom-section">
 			<div className={styles.customHeader} data-flx="user.keybinds-tab.custom-keybinds-list.custom-header">
@@ -118,7 +124,7 @@ export const CustomKeybindsList: React.FC<{searchQuery: string}> = observer(({se
 						{i18n._(CUSTOM_SHORTCUTS_DESCRIPTOR)}
 					</h3>
 					<p className={styles.customSubtitle} data-flx="user.keybinds-tab.custom-keybinds-list.custom-subtitle">
-						{i18n._(RECORDING_PAUSES_SHORTCUTS_DESCRIPTOR)}
+						{i18n._(SHORTCUTS_ARE_PAUSED_WHILE_RECORDING_DESCRIPTOR)}
 					</p>
 				</div>
 				<div
@@ -142,7 +148,13 @@ export const CustomKeybindsList: React.FC<{searchQuery: string}> = observer(({se
 						small
 						type="button"
 						onClick={handleAdd}
-						leftIcon={<PlusIcon size={14} weight="bold" data-flx="user.keybinds-tab.custom-keybinds-list.plus-icon" />}
+						leftIcon={
+							<PlusIcon
+								size={remFromPx(14)}
+								weight="bold"
+								data-flx="user.keybinds-tab.custom-keybinds-list.plus-icon"
+							/>
+						}
 						data-flx="user.keybinds-tab.custom-keybinds-list.button.add"
 					>
 						<Trans>Add shortcut</Trans>

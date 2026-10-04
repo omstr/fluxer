@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type {ValueOf} from '@fluxer/constants/src/ValueOf';
-import {action, makeAutoObservable} from 'mobx';
+import {makeAutoObservable} from 'mobx';
 
 const InitializationState = {
 	LOADING: 'LOADING',
@@ -14,8 +14,8 @@ type InitializationState = ValueOf<typeof InitializationState>;
 
 class Initialization {
 	state: InitializationState = InitializationState.LOADING;
+	hasCompletedInitialLoad = false;
 	error: string | null = null;
-	readyPayload: unknown = null;
 
 	constructor() {
 		makeAutoObservable(this, {}, {autoBind: true});
@@ -41,39 +41,31 @@ class Initialization {
 		return this.state === InitializationState.READY;
 	}
 
-	@action
 	setLoading(): void {
 		this.state = InitializationState.LOADING;
 		this.error = null;
-		this.readyPayload = null;
 	}
 
-	@action
 	setConnecting(): void {
 		this.state = InitializationState.CONNECTING;
 		this.error = null;
-		this.readyPayload = null;
 	}
 
-	@action
-	setReady(payload: unknown): void {
+	setReady(): void {
 		this.state = InitializationState.READY;
+		this.hasCompletedInitialLoad = true;
 		this.error = null;
-		this.readyPayload = payload;
 	}
 
-	@action
 	setError(error: string): void {
 		this.state = InitializationState.ERROR;
 		this.error = error;
-		this.readyPayload = null;
 	}
 
-	@action
 	reset(): void {
 		this.state = InitializationState.LOADING;
+		this.hasCompletedInitialLoad = false;
 		this.error = null;
-		this.readyPayload = null;
 	}
 }
 

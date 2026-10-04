@@ -3,6 +3,7 @@
 import * as Modal from '@app/features/app/components/dialogs/Modal';
 import styles from '@app/features/app/components/setup/SelfHostedSetupWizardGate.module.css';
 import {
+	classifySetupUnauthorized,
 	fetchInstanceConfig,
 	type SetupBrandingAssetKind,
 	testSmtpConfig,
@@ -29,6 +30,7 @@ import {
 	MediaExpiryStep,
 	type PremiumMode,
 	PremiumStep,
+	PushRelayConsentStep,
 	type RegistrationMode,
 	RegistrationStep,
 	type ServiceAvailability,
@@ -55,6 +57,7 @@ import {fileToBase64} from '@app/features/user/utils/AvatarUtils';
 import * as FormUtils from '@app/lib/forms';
 import {type ThemeType, ThemeTypes} from '@fluxer/constants/src/UserConstants';
 import type {InstanceConfigResponse} from '@fluxer/schema/src/domains/admin/AdminSchemas';
+import type {MessageDescriptor} from '@lingui/core';
 import {msg} from '@lingui/core/macro';
 import {useLingui} from '@lingui/react/macro';
 import {ArrowLeftIcon, ArrowRightIcon, CheckIcon, WrenchIcon} from '@phosphor-icons/react';
@@ -91,6 +94,11 @@ const LOADING_DESCRIPTOR = msg({
 const LOAD_ERROR_DESCRIPTOR = msg({
 	message: 'Could not load the instance configuration. Try reloading the page.',
 	comment: 'Error shown when the setup wizard fails to load the instance configuration.',
+});
+const ORIGIN_MISMATCH_DESCRIPTOR = msg({
+	message:
+		'The API is on a different origin than this page, so setup requests are sent without your session. Check the public origin and port this instance is configured with, then reload.',
+	comment: 'Error shown when the setup wizard cannot load because the API origin differs from the page origin.',
 });
 const ASSET_UPLOAD_ERROR_DESCRIPTOR = msg({
 	message: 'That image could not be used. Try a different file.',
@@ -148,12 +156,6 @@ const DEFAULT_INTEGRATION_DRAFT: ServiceIntegrationDraft = {
 	klipyApiKey: '',
 	youtubeMode: 'later',
 	youtubeApiKey: '',
-	captchaMode: 'later',
-	captchaProvider: 'hcaptcha',
-	hcaptchaSiteKey: '',
-	hcaptchaSecretKey: '',
-	turnstileSiteKey: '',
-	turnstileSecretKey: '',
 	emailMode: 'later',
 	emailEnabled: true,
 	emailFromEmail: '',
@@ -192,8 +194,6 @@ function wizardStepToIntegrationKind(step: WizardStep): IntegrationStepKind | nu
 			return 'gif';
 		case 'integration_youtube':
 			return 'youtube';
-		case 'integration_captcha':
-			return 'captcha';
 		case 'integration_email':
 			return 'email';
 		case 'integration_bluesky':
@@ -270,11 +270,6 @@ function isIntegrationStepValid(kind: IntegrationStepKind, draft: ServiceIntegra
 			return draft.klipyApiKey.trim().length > 0;
 		case 'youtube':
 			return draft.youtubeMode === 'later' || draft.youtubeApiKey.trim().length > 0;
-		case 'captcha':
-			if (draft.captchaMode === 'later') return true;
-			return draft.captchaProvider === 'hcaptcha'
-				? draft.hcaptchaSiteKey.trim().length > 0 && draft.hcaptchaSecretKey.trim().length > 0
-				: draft.turnstileSiteKey.trim().length > 0 && draft.turnstileSecretKey.trim().length > 0;
 		case 'email':
 			if (draft.emailMode === 'later' || !draft.emailEnabled) return true;
 			return (
@@ -305,13 +300,6 @@ function buildIntegrationsPatch(draft: ServiceIntegrationDraft) {
 		youtube?: {
 			api_key: string;
 		};
-		captcha?: {
-			provider: 'hcaptcha' | 'turnstile';
-			hcaptcha_site_key?: string;
-			hcaptcha_secret_key?: string;
-			turnstile_site_key?: string;
-			turnstile_secret_key?: string;
-		};
 		email?: {
 			enabled: boolean;
 			provider: 'smtp';
@@ -340,20 +328,6 @@ function buildIntegrationsPatch(draft: ServiceIntegrationDraft) {
 	}
 	if (draft.youtubeMode === 'configure') {
 		integrations.youtube = {api_key: draft.youtubeApiKey.trim()};
-	}
-	if (draft.captchaMode === 'configure') {
-		integrations.captcha =
-			draft.captchaProvider === 'hcaptcha'
-				? {
-						provider: 'hcaptcha',
-						hcaptcha_site_key: draft.hcaptchaSiteKey.trim(),
-						hcaptcha_secret_key: draft.hcaptchaSecretKey.trim(),
-					}
-				: {
-						provider: 'turnstile',
-						turnstile_site_key: draft.turnstileSiteKey.trim(),
-						turnstile_secret_key: draft.turnstileSecretKey.trim(),
-					};
 	}
 	if (draft.emailMode === 'configure') {
 		integrations.email = {
@@ -425,12 +399,12 @@ export const SelfHostedSetupWizardGate = observer(() => {
 	const stepNavigationUnlockTimerRef = useRef<number | null>(null);
 
 	const [config, setConfig] = useState<InstanceConfigResponse | null>(null);
-	const [loadError, setLoadError] = useState(false);
+	const [loadError, setLoadError] = useState<MessageDescriptor | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [stepNavigationLocked, setStepNavigationLocked] = useState(false);
 	const [wizardSnapshot, setWizardSnapshot] = useState(createSetupWizardSnapshot);
-	const [setupTheme, setSetupTheme] = useState<ThemeType>(ThemeTypes.SYSTEM);
+	const [setupTheme, setSetupTheme] = useState<ThemeType>(ThemeTypes.DARK);
 	const [forceUnauthenticatedSetup, setForceUnauthenticatedSetup] = useState(false);
 	const [integrationDraft, setIntegrationDraft] = useState<ServiceIntegrationDraft>(() => ({
 		...DEFAULT_INTEGRATION_DRAFT,
@@ -452,6 +426,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 		youtube: false,
 		bluesky: false,
 	});
+	const [pushRelayConsentAccepted, setPushRelayConsentAccepted] = useState(false);
 	const [premiumMode, setPremiumMode] = useState<PremiumMode>('mirror');
 	const [assets, setAssets] = useState<ReadonlyArray<BrandingAssetState>>(() =>
 		BRANDING_ASSET_KINDS.map((kind) => ({kind, url: null, preview: null})),
@@ -531,17 +506,18 @@ export const SelfHostedSetupWizardGate = observer(() => {
 	}, [authStoreAuthenticated, forceUnauthenticatedSetup]);
 
 	const resetStaleSetupSession = useCallback(async () => {
-		logger.warn('Instance config fetch returned 401 during setup; clearing stale local setup session');
+		logger.warn('The setup session token was rejected. Clearing the stale local setup session.');
 		setForceUnauthenticatedSetup(true);
 		registerFormDraftsRef.current.clear();
 		setConfig(null);
-		setLoadError(false);
+		setLoadError(null);
 		setSubmitError(null);
 		setSubmitting(false);
 		setWizardSnapshot(createSetupWizardSnapshot());
 		clearStepNavigationLock();
 		setIntegrationDraft({...DEFAULT_INTEGRATION_DRAFT});
 		setMediaExpiryDraft({...DEFAULT_MEDIA_EXPIRY_DRAFT});
+		setPushRelayConsentAccepted(false);
 		setSmtpTesting(false);
 		setSmtpTestResult(null);
 		try {
@@ -562,6 +538,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 		setSingleCommunityEnabled(next.policy.single_community_enabled);
 		setDirectMessagesDisabled(next.policy.direct_messages_disabled);
 		setPremiumMode(next.policy.premium_mode);
+		setPushRelayConsentAccepted(next.push_relay.relay_consent_accepted);
 		setServiceSelection({
 			gif: next.policy.services_resolved.gif_enabled,
 			youtube: next.policy.services_resolved.youtube_enabled,
@@ -569,7 +546,6 @@ export const SelfHostedSetupWizardGate = observer(() => {
 		});
 		setIntegrationDraft((current) => ({
 			...current,
-			captchaProvider: next.integrations.captcha.effective_provider === 'turnstile' ? 'turnstile' : 'hcaptcha',
 			emailEnabled: next.integrations.email.effective_enabled || next.integrations.email.enabled !== false,
 			emailFromEmail: next.integrations.email.from_email ?? current.emailFromEmail,
 			emailFromName: next.integrations.email.from_name ?? current.emailFromName,
@@ -605,7 +581,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 	useEffect(() => {
 		if (!isAuthenticated || config) return;
 		let cancelled = false;
-		setLoadError(false);
+		setLoadError(null);
 		void (async () => {
 			try {
 				const next = await fetchInstanceConfig();
@@ -613,12 +589,15 @@ export const SelfHostedSetupWizardGate = observer(() => {
 				hydrateFromConfig(next);
 			} catch (error) {
 				if (cancelled) return;
-				if (error instanceof HttpError && error.status === 401) {
+				const cause =
+					error instanceof HttpError && error.status === 401 ? await classifySetupUnauthorized() : 'unknown';
+				if (cancelled) return;
+				if (cause === 'stale_session') {
 					await resetStaleSetupSession();
 					return;
 				}
 				logger.error('Failed to load instance configuration', error);
-				setLoadError(true);
+				setLoadError(cause === 'origin_mismatch' ? ORIGIN_MISMATCH_DESCRIPTOR : LOAD_ERROR_DESCRIPTOR);
 			}
 		})();
 		return () => {
@@ -667,6 +646,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 		if (step === 'branding') return !productNameError;
 		if (step === 'community') return !singleCommunityNameError;
 		if (step === 'media_expiry') return isMediaExpiryStepValid(mediaExpiryDraft);
+		if (step === 'push_relay_consent') return true;
 		const integrationKind = wizardStepToIntegrationKind(step);
 		if (integrationKind) return isIntegrationStepValid(integrationKind, integrationDraft);
 		return true;
@@ -731,7 +711,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 				password: integrationDraft.smtpPassword,
 				secure: integrationDraft.smtpSecure,
 			});
-			setSmtpTestResult(result.ok ? 'ok' : (result.error ?? 'SMTP validation failed.'));
+			setSmtpTestResult(result.ok ? 'ok' : (result.error ?? 'failed'));
 		} catch (error) {
 			logger.error('Failed to validate SMTP configuration', error);
 			setSmtpTestResult(FormUtils.extractErrorMessage(i18n, error));
@@ -756,6 +736,10 @@ export const SelfHostedSetupWizardGate = observer(() => {
 			const nextConfig = await updateInstanceConfig({
 				integrations: buildIntegrationsPatch(integrationDraft),
 				media: buildMediaPatch(mediaExpiryDraft),
+				push_relay:
+					config.push_relay.relay_consent_accepted === pushRelayConsentAccepted
+						? undefined
+						: {relay_consent_accepted: pushRelayConsentAccepted},
 				registration: {mode: registrationMode},
 				app_public: {
 					branding: {
@@ -794,6 +778,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 		singleCommunityEnabled,
 		singleCommunityNameTrimmed,
 		directMessagesDisabled,
+		pushRelayConsentAccepted,
 		premiumMode,
 		serviceAvailability,
 		serviceSelection,
@@ -868,7 +853,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 										role="alert"
 										data-flx="app.self-hosted-setup-wizard-gate.load-error"
 									>
-										{i18n._(LOAD_ERROR_DESCRIPTOR)}
+										{i18n._(loadError)}
 									</p>
 								</div>
 							) : (
@@ -885,12 +870,28 @@ export const SelfHostedSetupWizardGate = observer(() => {
 											productName={fallbackProductName}
 											isAuthenticated={isAuthenticated}
 											initialFocusRef={welcomeInitialFocusRef}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.welcome-step"
 										/>
 									)}
-									{step === 'theme' && <ThemeStep theme={setupTheme} onThemeChange={setSetupTheme} />}
-									{step === 'admin_intro' && <AdminIntroStep />}
-									{step === 'admin_account' && <AdminAccountStep theme={setupTheme} />}
-									{step === 'loading' && <LoadingStep />}
+									{step === 'theme' && (
+										<ThemeStep
+											theme={setupTheme}
+											onThemeChange={setSetupTheme}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.theme-step"
+										/>
+									)}
+									{step === 'admin_intro' && (
+										<AdminIntroStep data-flx="app.setup.self-hosted-setup-wizard-gate.admin-intro-step" />
+									)}
+									{step === 'admin_account' && (
+										<AdminAccountStep
+											theme={setupTheme}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.admin-account-step"
+										/>
+									)}
+									{step === 'loading' && (
+										<LoadingStep data-flx="app.setup.self-hosted-setup-wizard-gate.loading-step" />
+									)}
 									{step === 'branding' && (
 										<BrandingStep
 											productName={productName}
@@ -902,10 +903,16 @@ export const SelfHostedSetupWizardGate = observer(() => {
 											onThemeColorChange={setThemeColor}
 											onUploadAsset={handleUploadAsset}
 											onClearAsset={handleClearAsset}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.branding-step"
 										/>
 									)}
 									{step === 'registration' && (
-										<RegistrationStep mode={registrationMode} disabled={submitting} onChange={setRegistrationMode} />
+										<RegistrationStep
+											mode={registrationMode}
+											disabled={submitting}
+											onChange={setRegistrationMode}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.registration-step.set-registration-mode"
+										/>
 									)}
 									{step === 'community' && (
 										<CommunityStep
@@ -917,6 +924,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 											onToggleSingleCommunity={setSingleCommunityEnabled}
 											onSingleCommunityNameChange={setSingleCommunityName}
 											onToggleDirectMessages={setDirectMessagesDisabled}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.community-step"
 										/>
 									)}
 									{step === 'media_expiry' && (
@@ -924,6 +932,7 @@ export const SelfHostedSetupWizardGate = observer(() => {
 											draft={mediaExpiryDraft}
 											disabled={submitting}
 											onDraftChange={handleMediaExpiryDraftChange}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.media-expiry-step"
 										/>
 									)}
 									{wizardStepToIntegrationKind(step) && (
@@ -935,6 +944,15 @@ export const SelfHostedSetupWizardGate = observer(() => {
 											smtpTestResult={smtpTestResult}
 											onDraftChange={handleIntegrationDraftChange}
 											onTestSmtp={handleTestSmtp}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.integration-step"
+										/>
+									)}
+									{step === 'push_relay_consent' && (
+										<PushRelayConsentStep
+											accepted={pushRelayConsentAccepted}
+											disabled={submitting}
+											onChange={setPushRelayConsentAccepted}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.push-relay-consent-step"
 										/>
 									)}
 									{step === 'services' && (
@@ -943,10 +961,16 @@ export const SelfHostedSetupWizardGate = observer(() => {
 											selection={serviceSelection}
 											disabled={submitting}
 											onToggle={handleToggleService}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.services-step"
 										/>
 									)}
 									{step === 'premium' && (
-										<PremiumStep mode={premiumMode} disabled={submitting} onChange={setPremiumMode} />
+										<PremiumStep
+											mode={premiumMode}
+											disabled={submitting}
+											onChange={setPremiumMode}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.premium-step.set-premium-mode"
+										/>
 									)}
 									{step === 'finish' && (
 										<FinishStep
@@ -955,8 +979,10 @@ export const SelfHostedSetupWizardGate = observer(() => {
 											singleCommunityEnabled={singleCommunityEnabled}
 											directMessagesDisabled={directMessagesDisabled}
 											attachmentExpiryEnabled={mediaExpiryDraft.enabled}
+											pushRelayConsentAccepted={pushRelayConsentAccepted}
 											premiumMode={premiumMode}
 											submitError={submitError}
+											data-flx="app.setup.self-hosted-setup-wizard-gate.finish-step"
 										/>
 									)}
 								</SteppedCarousel>
@@ -989,7 +1015,13 @@ export const SelfHostedSetupWizardGate = observer(() => {
 													<Button
 														variant="secondary"
 														disabled={stepNavigationLocked}
-														leftIcon={<ArrowLeftIcon size={18} weight="bold" />}
+														leftIcon={
+															<ArrowLeftIcon
+																size={18}
+																weight="bold"
+																data-flx="app.setup.self-hosted-setup-wizard-gate.arrow-left-icon"
+															/>
+														}
 														onClick={goBack}
 														data-flx="app.self-hosted-setup-wizard-gate.back-button"
 													>
@@ -1015,7 +1047,13 @@ export const SelfHostedSetupWizardGate = observer(() => {
 													>
 														<Button
 															submitting={submitting}
-															rightIcon={<CheckIcon size={18} weight="bold" />}
+															rightIcon={
+																<CheckIcon
+																	size={18}
+																	weight="bold"
+																	data-flx="app.setup.self-hosted-setup-wizard-gate.check-icon"
+																/>
+															}
 															onClick={submit}
 															data-flx="app.self-hosted-setup-wizard-gate.finish-button"
 														>
@@ -1035,7 +1073,13 @@ export const SelfHostedSetupWizardGate = observer(() => {
 														<Button
 															disabled={primaryButtonDisabled}
 															submitting={isLoading}
-															rightIcon={<ArrowRightIcon size={18} weight="bold" />}
+															rightIcon={
+																<ArrowRightIcon
+																	size={18}
+																	weight="bold"
+																	data-flx="app.setup.self-hosted-setup-wizard-gate.arrow-right-icon"
+																/>
+															}
 															onClick={handlePrimaryButton}
 															data-flx="app.self-hosted-setup-wizard-gate.next-button"
 														>

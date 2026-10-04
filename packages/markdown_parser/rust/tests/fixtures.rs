@@ -152,6 +152,67 @@ fn native_parser_fixtures_cover_typescript_suite_surface() {
 }
 
 #[test]
+fn native_parser_pairs_regional_indicators_with_emoji_context() {
+    assert_eq!(
+        parse(
+            "🇦🇧🇸🇪",
+            0,
+            "S\t0\t4\t🇦\tregional_indicator_a\t1f1e6\nS\t4\t4\t🇧\tregional_indicator_b\t1f1e7\nS\t8\t8\t🇸🇪\tflag_se\t1f1f8-1f1ea\n"
+        ),
+        json!({"nodes":[
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇦","codepoints":"1f1e6","name":"regional_indicator_a"}},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇧","codepoints":"1f1e7","name":"regional_indicator_b"}},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇸🇪","codepoints":"1f1f8-1f1ea","name":"flag_se"}}
+        ]})
+    );
+    assert_eq!(
+        parse(
+            "🇦🇧🇦🇸",
+            0,
+            "S\t0\t4\t🇦\tregional_indicator_a\t1f1e6\nS\t4\t4\t🇧\tregional_indicator_b\t1f1e7\nS\t8\t8\t🇦🇸\tflag_as\t1f1e6-1f1f8\n"
+        ),
+        json!({"nodes":[
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇦","codepoints":"1f1e6","name":"regional_indicator_a"}},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇧","codepoints":"1f1e7","name":"regional_indicator_b"}},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇦🇸","codepoints":"1f1e6-1f1f8","name":"flag_as"}}
+        ]})
+    );
+    assert_eq!(
+        parse("Sark 🇨🇶", 0, "S\t5\t8\t🇨🇶\tflag_sark\t1f1e8-1f1f6\n"),
+        json!({"nodes":[
+            {"type":"Text","content":"Sark "},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇨🇶","codepoints":"1f1e8-1f1f6","name":"flag_sark"}}
+        ]})
+    );
+    assert_eq!(
+        parse("x 🇦", 0, "S\t2\t4\t🇦\tregional_indicator_a\t1f1e6\n"),
+        json!({"nodes":[
+            {"type":"Text","content":"x "},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇦","codepoints":"1f1e6","name":"regional_indicator_a"}}
+        ]})
+    );
+    assert_eq!(
+        parse(
+            "🇦🇧🇸🇪",
+            0,
+            "S\t0\t4\t🇦\tregional_indicator_a\t1f1e6\nS\t4\t8\t🇧🇸\tflag_bs\t1f1e7-1f1f8\nS\t12\t4\t🇪\tregional_indicator_e\t1f1ea\n"
+        ),
+        json!({"nodes":[
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇦","codepoints":"1f1e6","name":"regional_indicator_a"}},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇧","codepoints":"1f1e7","name":"regional_indicator_b"}},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇸🇪","codepoints":"1f1f8-1f1ea","name":"flag_se"}}
+        ]})
+    );
+    assert_eq!(
+        parse("🇦🇧🇸🇪", 0, ""),
+        json!({"nodes":[
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇦🇧","codepoints":"1f1e6-1f1e7","name":"flag_ab"}},
+            {"type":"Emoji","kind":{"kind":"Standard","raw":"🇸🇪","codepoints":"1f1f8-1f1ea","name":"flag_se"}}
+        ]})
+    );
+}
+
+#[test]
 fn native_parser_allows_apostrophe_in_masked_link_destination() {
     let url = "https://docs.example.test/help/faq/#why-can't-this-link-parse%3F";
     let source = format!("[Example resource]({url})");
@@ -255,6 +316,43 @@ fn native_parser_rejects_apostrophe_in_masked_link_authority() {
         parse(input, ParserFlags::ALLOW_MASKED_LINKS, ""),
         json!({"nodes":[
             {"type":"Text","content":input}
+        ]})
+    );
+}
+
+#[test]
+fn native_parser_keeps_content_after_unterminated_escaped_destination() {
+    let flags = ParserFlags::ALLOW_MASKED_LINKS | ParserFlags::ALLOW_AUTOLINKS;
+    assert_eq!(
+        parse(
+            "a [x](<https://example.com/y)> b [e](<https://example.com/f>)",
+            flags,
+            ""
+        ),
+        json!({"nodes":[
+            {"type":"Text","content":"a [x]("},
+            {"type":"Link","url":"https://example.com/y)","escaped":true,"rawUrl":"https://example.com/y)","source":"<https://example.com/y)>"},
+            {"type":"Text","content":" b "},
+            {"type":"Link","text":{"type":"Text","content":"e"},"url":"https://example.com/f","escaped":true,"rawUrl":"https://example.com/f","source":"[e](<https://example.com/f>)"}
+        ]})
+    );
+    assert_eq!(
+        parse("[bad](<https://example.com/a> )", flags, ""),
+        json!({"nodes":[
+            {"type":"Text","content":"[bad]("},
+            {"type":"Link","url":"https://example.com/a","escaped":true,"rawUrl":"https://example.com/a","source":"<https://example.com/a>"},
+            {"type":"Text","content":" )"}
+        ]})
+    );
+}
+
+#[test]
+fn native_parser_still_accepts_well_formed_escaped_destinations() {
+    let flags = ParserFlags::ALLOW_MASKED_LINKS | ParserFlags::ALLOW_AUTOLINKS;
+    assert_eq!(
+        parse("[ok](<https://example.com/a>)", flags, ""),
+        json!({"nodes":[
+            {"type":"Link","text":{"type":"Text","content":"ok"},"url":"https://example.com/a","escaped":true,"rawUrl":"https://example.com/a","source":"[ok](<https://example.com/a>)"}
         ]})
     );
 }
@@ -366,4 +464,27 @@ proptest::proptest! {
         let serialized = serde_json::to_string(&nodes).expect("serialize succeeds");
         prop_assert!(serialized.starts_with('['));
     }
+}
+
+#[test]
+fn native_parser_starts_a_table_directly_after_a_text_line() {
+    let input =
+        "intro text\r\n| Framework | Type |\r\n| --------- | ---- |\r\n| React | UI library |";
+    let parsed = parse(input, ParserFlags::ALL, "");
+    let nodes = parsed["nodes"].as_array().expect("nodes array");
+    assert!(
+        nodes.iter().any(|node| node["type"] == "Table"),
+        "expected a Table node, got {parsed}"
+    );
+}
+
+#[test]
+fn native_parser_still_requires_a_delimiter_row_for_a_table() {
+    let input = "intro text\n| not | a | table |\njust more text";
+    let parsed = parse(input, ParserFlags::ALL, "");
+    let nodes = parsed["nodes"].as_array().expect("nodes array");
+    assert!(
+        !nodes.iter().any(|node| node["type"] == "Table"),
+        "pipes alone must not form a table, got {parsed}"
+    );
 }

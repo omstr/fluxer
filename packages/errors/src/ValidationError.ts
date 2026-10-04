@@ -3,21 +3,20 @@
 import {APIErrorCodes} from '@fluxer/constants/src/ApiErrorCodes';
 import {HttpStatus} from '@fluxer/constants/src/HttpConstants';
 import {FluxerError} from '@fluxer/errors/src/FluxerError';
+import type {ValidationErrorItem} from '@fluxer/schema/src/domains/common/ErrorSchemas';
 
-interface FieldError {
-	field: string;
+interface PathError extends ValidationErrorItem {
 	code: string;
-	message: string;
 }
 
 interface ValidationErrorOptions {
 	code?: string;
 	message?: string;
-	errors: Array<FieldError>;
+	errors: Array<PathError>;
 }
 
 export class ValidationError extends FluxerError {
-	readonly errors: Array<FieldError>;
+	readonly errors: Array<PathError>;
 
 	constructor(options: ValidationErrorOptions) {
 		super({
@@ -46,13 +45,13 @@ export class ValidationError extends FluxerError {
 		);
 	}
 
-	static fromField(field: string, code: string, message: string): ValidationError {
+	static fromPath(path: string, code: string, message: string): ValidationError {
 		return new ValidationError({
-			errors: [{field, code, message}],
+			errors: [{path, code, message}],
 		});
 	}
 
-	static fromFields(errors: Array<FieldError>): ValidationError {
+	static fromPaths(errors: Array<PathError>): ValidationError {
 		return new ValidationError({errors});
 	}
 }

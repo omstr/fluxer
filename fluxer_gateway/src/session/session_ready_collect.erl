@@ -52,14 +52,14 @@ collect_ready_presences(State, _CollectedGuilds) ->
 -spec collect_presence_targets(session_state(), user_id()) -> [user_id()].
 collect_presence_targets(State, CurrentUserId) when is_map(State) ->
     FIds = presence_targets:friend_ids_from_state(State),
-    DmMap = presence_targets:dm_recipients_from_state(State),
+    GroupDmMap = presence_targets:group_dm_recipients_from_state(State),
     TargetMap0 = add_presence_target_ids(FIds, CurrentUserId, #{}),
     TargetMap = maps:fold(
         fun(_Cid, Recipients, Acc) ->
             add_presence_target_map(Recipients, CurrentUserId, Acc)
         end,
         TargetMap0,
-        DmMap
+        GroupDmMap
     ),
     maps:keys(TargetMap).
 
@@ -233,10 +233,10 @@ dedup_users(Users) ->
     Map = lists:foldl(fun add_user_by_id/2, #{}, Users),
     maps:values(Map).
 
--spec add_user_by_id(term(), #{user_id() => map()}) -> #{user_id() => map()}.
+-spec add_user_by_id(map() | undefined, #{user_id() => map()}) -> #{user_id() => map()}.
 add_user_by_id(undefined, Acc) ->
     Acc;
-add_user_by_id(U, Acc) ->
+add_user_by_id(U, Acc) when is_map(U) ->
     case user_id(U) of
         undefined -> Acc;
         Id -> Acc#{Id => U#{<<"id">> => Id}}
@@ -366,7 +366,7 @@ collect_presence_targets_deduplicates_before_fetch_test() ->
             }
         }
     },
-    ?assertEqual([2, 3, 5], lists:sort(collect_presence_targets(State, 1))).
+    ?assertEqual([2, 5], lists:sort(collect_presence_targets(State, 1))).
 
 collect_ready_users_collects_directly_into_dedup_map_test() ->
     UserA = #{<<"id">> => <<"10">>, <<"username">> => <<"a">>},

@@ -12,7 +12,6 @@ import {http} from '@app/features/platform/transport/RestTransport';
 import {API_CODE_VERSION} from '@fluxer/constants/src/AppConstants';
 import type {
 	InstanceAppPublic,
-	InstanceCaptcha,
 	InstanceCommunity,
 	InstanceDiscoveryResponse,
 	InstanceFeatures,
@@ -26,7 +25,8 @@ import type {InstanceConfigResponse} from '@fluxer/schema/src/domains/admin/Admi
 import {makeAutoObservable, reaction, runInAction} from 'mobx';
 
 export type {
-	InstanceCaptcha,
+	GifProvider,
+	GifProviderInfo,
 	InstanceCommunity,
 	InstanceDiscoveryResponse,
 	InstanceFeatures,
@@ -34,7 +34,6 @@ export type {
 	InstanceServices,
 	InstanceSsoConfig,
 };
-export type {GifProvider, GifProviderInfo};
 
 export interface RuntimeConfigSnapshot {
 	apiEndpoint: string;
@@ -50,9 +49,6 @@ export interface RuntimeConfigSnapshot {
 	gifProvider: GifProvider;
 	gifProviderDisplayName: string;
 	gifAttributionRequired: boolean;
-	captchaProvider: 'hcaptcha' | 'turnstile' | 'none';
-	hcaptchaSiteKey: string | null;
-	turnstileSiteKey: string | null;
 	apiCodeVersion: number;
 	features: InstanceFeatures;
 	sso: InstanceSsoConfig | null;
@@ -64,12 +60,47 @@ export interface RuntimeConfigSnapshot {
 	appPublic: InstanceAppPublic;
 }
 
+function runtimeInstanceKey(snapshot: RuntimeConfigSnapshot): string | null {
+	try {
+		const endpoint = snapshot.apiEndpoint.trim();
+		const url = new URL(endpoint);
+		if (
+			(url.protocol !== 'https:' && url.protocol !== 'http:') ||
+			url.username ||
+			url.password ||
+			url.search ||
+			url.hash
+		) {
+			return null;
+		}
+		const path = url.pathname.replace(/\/+$/u, '');
+		return `${url.origin.toLowerCase()}${path}`;
+	} catch {
+		return null;
+	}
+}
+
+export function runtimeConfigSnapshotsAreSameInstance(
+	left: RuntimeConfigSnapshot | undefined,
+	right: RuntimeConfigSnapshot,
+): boolean {
+	if (!left) {
+		return false;
+	}
+	const leftKey = runtimeInstanceKey(left);
+	const rightKey = runtimeInstanceKey(right);
+	return leftKey !== null && leftKey === rightKey;
+}
+
 const DEFAULT_INSTANCE_FEATURES: InstanceFeatures = {
 	voice_enabled: false,
 	stripe_enabled: false,
+	premium_enabled: false,
+	stripe_serviceable: false,
 	self_hosted: false,
 	presigned_attachment_uploads: false,
 	emails_enabled: false,
+	phone_verification_enabled: false,
 };
 
 export const DEFAULT_INSTANCE_REGISTRATION: InstanceRegistration = {
@@ -81,6 +112,7 @@ export const DEFAULT_INSTANCE_COMMUNITY: InstanceCommunity = {
 	single_community: false,
 	single_community_guild_id: null,
 	direct_messages_disabled: false,
+	guild_create_access: true,
 };
 
 export function normalizeInstanceCommunity(community?: InstanceCommunity | null): InstanceCommunity {
@@ -112,6 +144,10 @@ export const DEFAULT_APP_PUBLIC_CONFIG: InstanceAppPublic = {
 		wordmark_url: null,
 		favicon_url: null,
 		theme_color: null,
+		status_page_url: null,
+		status_page_incident_history_url: null,
+		premium_product_name: 'Plutonium',
+		premium_info_url: null,
 	},
 	setup: {
 		configured: false,
@@ -169,15 +205,14 @@ function removeDocumentLink(rel: string): void {
 
 function upsertDocumentMeta(name: string, content: string): void {
 	if (typeof document === 'undefined') return;
-	const selector = `meta[name="${name}"][data-fluxer-branding="true"]`;
-	const existing = document.head.querySelector<HTMLMetaElement>(selector);
-	const meta = existing ?? document.createElement('meta');
+	const brandedMeta = document.head.querySelector<HTMLMetaElement>(`meta[name="${name}"][data-fluxer-branding="true"]`);
+	const meta = brandedMeta ?? document.createElement('meta');
 	meta.name = name;
 	meta.content = content;
 	meta.dataset.fluxerBranding = 'true';
-	if (!existing) {
-		document.head.appendChild(meta);
-	}
+	if (brandedMeta) return;
+	const precedingMeta = document.head.querySelector<HTMLMetaElement>(`meta[name="${name}"]`);
+	document.head.insertBefore(meta, precedingMeta);
 }
 
 function removeDocumentMeta(name: string): void {
@@ -244,7 +279,6 @@ export function normalizeAppPublicConfig(appPublic?: Partial<InstanceAppPublic> 
 }
 
 class RuntimeConfig {
-	private _connectSeq = 0;
 	apiEndpoint: string = '';
 	apiPublicEndpoint: string = '';
 	gatewayEndpoint: string = '';
@@ -258,9 +292,6 @@ class RuntimeConfig {
 	gifProvider: GifProvider = DEFAULT_GIF_PROVIDER_INFO.name;
 	gifProviderDisplayName: string = DEFAULT_GIF_PROVIDER_INFO.displayName;
 	gifAttributionRequired: boolean = DEFAULT_GIF_PROVIDER_INFO.attributionRequired;
-	captchaProvider: 'hcaptcha' | 'turnstile' | 'none' = 'none';
-	hcaptchaSiteKey: string | null = null;
-	turnstileSiteKey: string | null = null;
 	apiCodeVersion: number = API_CODE_VERSION;
 	features: InstanceFeatures = {...DEFAULT_INSTANCE_FEATURES};
 	sso: InstanceSsoConfig | null = null;
@@ -290,43 +321,6 @@ class RuntimeConfig {
 		return Promise.resolve();
 	}
 
-	applySnapshot(snapshot: RuntimeConfigSnapshot): void {
-		const gifProviderInfo = normalizeGifProviderInfo({
-			name: snapshot.gifProvider,
-			attributionRequired: snapshot.gifAttributionRequired,
-		});
-		this.apiEndpoint = snapshot.apiEndpoint;
-		this.apiPublicEndpoint = snapshot.apiPublicEndpoint;
-		this.gatewayEndpoint = snapshot.gatewayEndpoint;
-		this.mediaEndpoint = snapshot.mediaEndpoint;
-		this.staticCdnEndpoint = snapshot.staticCdnEndpoint;
-		this.marketingEndpoint = snapshot.marketingEndpoint;
-		this.adminEndpoint = snapshot.adminEndpoint;
-		this.inviteEndpoint = snapshot.inviteEndpoint;
-		this.giftEndpoint = snapshot.giftEndpoint;
-		this.webAppEndpoint = snapshot.webAppEndpoint;
-		this.gifProvider = gifProviderInfo.name;
-		this.gifProviderDisplayName = gifProviderInfo.displayName;
-		this.gifAttributionRequired = gifProviderInfo.attributionRequired;
-		this.captchaProvider = snapshot.captchaProvider;
-		this.hcaptchaSiteKey = snapshot.hcaptchaSiteKey;
-		this.turnstileSiteKey = snapshot.turnstileSiteKey;
-		this.apiCodeVersion = snapshot.apiCodeVersion;
-		this.features = {
-			...DEFAULT_INSTANCE_FEATURES,
-			...snapshot.features,
-		};
-		this.sso = snapshot.sso;
-		this.registration = normalizeInstanceRegistration(snapshot.registration);
-		this.community = normalizeInstanceCommunity(snapshot.community);
-		this.services = normalizeInstanceServices(snapshot.services);
-		this.publicPushVapidKey = snapshot.publicPushVapidKey;
-		this.limits = this.normalizeLimits(snapshot.limits ?? this.createEmptyLimitConfig());
-		this.currentDefaultsHash = null;
-		this.appPublic = normalizeAppPublicConfig(snapshot.appPublic);
-		applyDocumentBranding(this.appPublic);
-	}
-
 	getSnapshot(): RuntimeConfigSnapshot {
 		return {
 			apiEndpoint: this.apiEndpoint,
@@ -342,9 +336,6 @@ class RuntimeConfig {
 			gifProvider: this.gifProvider,
 			gifProviderDisplayName: this.gifProviderDisplayName,
 			gifAttributionRequired: this.gifAttributionRequired,
-			captchaProvider: this.captchaProvider,
-			hcaptchaSiteKey: this.hcaptchaSiteKey,
-			turnstileSiteKey: this.turnstileSiteKey,
 			apiCodeVersion: this.apiCodeVersion,
 			features: {...this.features},
 			sso: this.sso ? {...this.sso} : null,
@@ -388,16 +379,6 @@ class RuntimeConfig {
 		return this.normalizeLimits(limits as LimitConfigSnapshot | undefined);
 	}
 
-	async withSnapshot<T>(snapshot: RuntimeConfigSnapshot, fn: () => Promise<T>): Promise<T> {
-		const before = this.getSnapshot();
-		this.applySnapshot(snapshot);
-		try {
-			return await fn();
-		} finally {
-			this.applySnapshot(before);
-		}
-	}
-
 	applyAdminInstanceConfig(config: InstanceConfigResponse): void {
 		const appPublic = normalizeAppPublicConfig({
 			branding: config.app_public.branding,
@@ -412,6 +393,9 @@ class RuntimeConfig {
 			this.features = {
 				...this.features,
 				self_hosted: config.self_hosted,
+				premium_enabled: !config.self_hosted || config.policy.premium_mode === 'mirror',
+				stripe_enabled: config.billing.billing_active,
+				stripe_serviceable: config.billing.stripe_serviceable,
 			};
 			this.registration = normalizeInstanceRegistration(config.registration);
 			this.community = normalizeInstanceCommunity({
@@ -420,6 +404,7 @@ class RuntimeConfig {
 					? config.policy.single_community_guild_id
 					: null,
 				direct_messages_disabled: config.policy.direct_messages_disabled,
+				guild_create_access: config.policy.guild_create_access,
 			});
 			this.services = normalizeInstanceServices({
 				gif_enabled: config.policy.services_resolved.gif_enabled,
@@ -429,50 +414,6 @@ class RuntimeConfig {
 			this.appPublic = appPublic;
 		});
 		applyDocumentBranding(appPublic);
-	}
-
-	async connectToEndpoint(input: string): Promise<void> {
-		const connectId = ++this._connectSeq;
-		const apiEndpoint = this.normalizeEndpoint(input);
-		const wellKnownUrl = this.buildWellKnownUrl(apiEndpoint);
-		const response = await http.get<InstanceDiscoveryResponse>(wellKnownUrl);
-		if (connectId !== this._connectSeq) {
-			return;
-		}
-		if (!response.ok) {
-			throw new Error(`Failed to reach ${wellKnownUrl} (${response.status})`);
-		}
-		this.updateFromInstance(response.body);
-	}
-
-	private buildWellKnownUrl(apiEndpoint: string): string {
-		try {
-			const url = new URL(apiEndpoint);
-			const isOfficialWebApp = url.hostname === 'web.fluxer.app' || url.hostname === 'web.canary.fluxer.app';
-			url.pathname = isOfficialWebApp ? '/api/.well-known/fluxer' : '/.well-known/fluxer';
-			return url.toString();
-		} catch {
-			return `${apiEndpoint.replace(/\/api\/?$/, '')}/.well-known/fluxer`;
-		}
-	}
-
-	private normalizeEndpoint(input: string): string {
-		const trimmed = input['trim']();
-		if (!trimmed) {
-			throw new Error('API endpoint is required');
-		}
-		let candidate = trimmed;
-		if (candidate.startsWith('/')) {
-			candidate = `${window.location.origin}${candidate}`;
-		} else if (!/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//.test(candidate)) {
-			candidate = `https://${candidate}`;
-		}
-		const url = new URL(candidate);
-		if (url.pathname === '' || url.pathname === '/') {
-			url.pathname = '/api';
-		}
-		url.pathname = url.pathname.replace(/\/+$/, '');
-		return url.toString();
 	}
 
 	private updateFromInstance(instance: InstanceDiscoveryResponse): void {
@@ -499,9 +440,6 @@ class RuntimeConfig {
 			this.gifProvider = gifProviderInfo.name;
 			this.gifProviderDisplayName = gifProviderInfo.displayName;
 			this.gifAttributionRequired = gifProviderInfo.attributionRequired;
-			this.captchaProvider = instance.captcha.provider;
-			this.hcaptchaSiteKey = instance.captcha.hcaptcha_site_key;
-			this.turnstileSiteKey = instance.captcha.turnstile_site_key;
 			this.apiCodeVersion = instance.api_code_version;
 			this.features = {
 				...DEFAULT_INSTANCE_FEATURES,
@@ -541,8 +479,38 @@ class RuntimeConfig {
 		}
 	}
 
+	get statusPageUrl(): string {
+		return this.appPublic.branding.status_page_url ?? '';
+	}
+
+	get statusPageIncidentHistoryUrl(): string {
+		return this.appPublic.branding.status_page_incident_history_url ?? '';
+	}
+
 	isSelfHosted(): boolean {
 		return DeveloperOptions.selfHostedModeOverride || this.features.self_hosted;
+	}
+
+	get premiumEnabled(): boolean {
+		return this.features.premium_enabled;
+	}
+
+	get stripeEnabled(): boolean {
+		return this.features.stripe_enabled;
+	}
+
+	get stripeServiceable(): boolean {
+		return this.features.stripe_serviceable;
+	}
+
+	get premiumProductName(): string {
+		return (
+			this.appPublic.branding.premium_product_name?.trim() || DEFAULT_APP_PUBLIC_CONFIG.branding.premium_product_name
+		);
+	}
+
+	get premiumInfoUrl(): string | null {
+		return this.appPublic.branding.premium_info_url ?? null;
 	}
 
 	get emailsEnabled(): boolean {
@@ -684,16 +652,6 @@ class RuntimeConfig {
 		} catch {
 			return 'localhost';
 		}
-	}
-}
-
-export function describeApiEndpoint(endpoint: string): string {
-	try {
-		const url = new URL(endpoint);
-		const path = url.pathname === '/api' ? '' : url.pathname;
-		return `${url.host}${path}`;
-	} catch {
-		return endpoint;
 	}
 }
 

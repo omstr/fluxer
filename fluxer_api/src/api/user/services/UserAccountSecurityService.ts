@@ -1,5 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {ApiContext} from '@app/api/ApiContext';
+import * as AuthMfa from '@app/api/auth/AuthMfa';
+import * as AuthPassword from '@app/api/auth/AuthPassword';
+import * as AuthSession from '@app/api/auth/AuthSession';
+import {assertEmailNotBlocklisted} from '@app/api/auth/EmailBlocklist';
+import {deriveSudoMethods, userHasSudoCapability} from '@app/api/auth/services/SudoMethods';
+import type {SudoVerificationResult} from '@app/api/auth/services/SudoVerificationService';
+import {Config} from '@app/api/Config';
+import type {UserRow} from '@app/api/database/types/UserTypes';
+import type {IDiscriminatorService} from '@app/api/infrastructure/DiscriminatorService';
+import type {LimitConfigService} from '@app/api/limits/LimitConfigService';
+import {resolveLimitSafe} from '@app/api/limits/LimitConfigUtils';
+import {createLimitMatchContext} from '@app/api/limits/LimitMatchContextBuilder';
+import {profileSubstringBlocklistCache} from '@app/api/middleware/ProfileSubstringBlocklistCache';
+import type {AuthSession as AuthSessionModel} from '@app/api/models/AuthSession';
+import type {User} from '@app/api/models/User';
+import {enforceFluxerTagChangeRateLimit} from '@app/api/user/FluxerTagChangeRateLimit';
+import type {IUserAccountRepository} from '@app/api/user/repositories/IUserAccountRepository';
+import {isProfileSubstringExempt} from '@app/api/user/UserHelpers';
 import {PremiumFlags, UserPremiumTypes} from '@fluxer/constants/src/UserConstants';
 import {ValidationErrorCodes} from '@fluxer/constants/src/ValidationErrorCodes';
 import {SudoModeRequiredError} from '@fluxer/errors/src/domains/auth/SudoModeRequiredError';
@@ -7,23 +26,6 @@ import {ContentBlockedError} from '@fluxer/errors/src/domains/content/ContentBlo
 import {InputValidationError} from '@fluxer/errors/src/domains/core/InputValidationError';
 import type {UserUpdateRequest} from '@fluxer/schema/src/domains/user/UserRequestSchemas';
 import type {IRateLimitService} from '@pkgs/rate_limit/src/IRateLimitService';
-import type {ApiContext} from '../../ApiContext';
-import {Config} from '../../Config';
-import * as AuthPassword from '../../auth/AuthPassword';
-import * as AuthSession from '../../auth/AuthSession';
-import type {SudoVerificationResult} from '../../auth/services/SudoVerificationService';
-import {deriveSudoMethods, userHasMfa} from '../../auth/services/SudoVerificationService';
-import type {UserRow} from '../../database/types/UserTypes';
-import type {IDiscriminatorService} from '../../infrastructure/DiscriminatorService';
-import type {LimitConfigService} from '../../limits/LimitConfigService';
-import {resolveLimitSafe} from '../../limits/LimitConfigUtils';
-import {createLimitMatchContext} from '../../limits/LimitMatchContextBuilder';
-import {profileSubstringBlocklistCache} from '../../middleware/ProfileSubstringBlocklistCache';
-import type {AuthSession as AuthSessionModel} from '../../models/AuthSession';
-import type {User} from '../../models/User';
-import {enforceFluxerTagChangeRateLimit} from '../FluxerTagChangeRateLimit';
-import type {IUserAccountRepository} from '../repositories/IUserAccountRepository';
-import {isProfileSubstringExempt} from '../UserHelpers';
 
 interface UserUpdateMetadata {
 	invalidateAuthSessions?: boolean;
@@ -37,6 +39,11 @@ interface UserAccountSecurityServiceDeps {
 	discriminatorService: IDiscriminatorService;
 	rateLimitService: IRateLimitService;
 	limitConfigService: LimitConfigService;
+}
+
+export interface AuthSessionReplacement {
+	token: string;
+	authSessionIdHash: string;
 }
 
 export class UserAccountSecurityService {
@@ -64,7 +71,6 @@ export class UserAccountSecurityService {
 		const isUnclaimedAccount = user.isUnclaimedAccount();
 		const identityVerifiedViaSudo = sudoContext?.method === 'mfa' || sudoContext?.method === 'sudo_token';
 		const identityVerifiedViaPassword = sudoContext?.method === 'password';
-		const hasMfa = userHasMfa(user);
 		const rawEmail = data.email?.trim();
 		const normalizedEmail = rawEmail?.toLowerCase();
 		const hasPasswordRequiredChanges =
@@ -74,7 +80,7 @@ export class UserAccountSecurityService {
 			data.new_password !== undefined;
 		const requiresVerification = hasPasswordRequiredChanges && !isUnclaimedAccount;
 		if (requiresVerification && !identityVerifiedViaSudo && !identityVerifiedViaPassword) {
-			throw new SudoModeRequiredError(hasMfa, deriveSudoMethods(user));
+			throw await this.createSudoModeRequiredError(user);
 		}
 		if (isUnclaimedAccount && data.new_password) {
 			updates.password_hash = await this.hashNewPassword(data.new_password);
@@ -85,7 +91,7 @@ export class UserAccountSecurityService {
 				throw InputValidationError.fromCode('password', ValidationErrorCodes.PASSWORD_NOT_SET);
 			}
 			if (!identityVerifiedViaSudo && !identityVerifiedViaPassword) {
-				throw new SudoModeRequiredError(hasMfa, deriveSudoMethods(user));
+				throw await this.createSudoModeRequiredError(user);
 			}
 			updates.password_hash = await this.hashNewPassword(data.new_password);
 			updates.password_last_changed_at = new Date();
@@ -127,8 +133,6 @@ export class UserAccountSecurityService {
 		if (user.isBot) {
 			updates.global_name = null;
 		} else if (data.global_name !== undefined) {
-			if (data.global_name !== user.globalName) {
-			}
 			if (
 				data.global_name &&
 				!isProfileSubstringExempt(user) &&
@@ -140,6 +144,7 @@ export class UserAccountSecurityService {
 		}
 		if (rawEmail) {
 			if (normalizedEmail && normalizedEmail !== user.email?.toLowerCase()) {
+				await assertEmailNotBlocklisted(normalizedEmail, 'email');
 				const existing = await this.deps.userAccountRepository.findByEmail(normalizedEmail);
 				if (existing && existing.id !== user.id) {
 					throw InputValidationError.fromCode('email', ValidationErrorCodes.EMAIL_ALREADY_IN_USE);
@@ -158,12 +163,23 @@ export class UserAccountSecurityService {
 		user: User;
 		oldAuthSession: AuthSessionModel;
 		request: Request;
-	}): Promise<void> {
-		await AuthSession.replaceCurrentAuthSession(this.deps.apiContext, {
+	}): Promise<AuthSessionReplacement> {
+		const replacement = await AuthSession.replaceCurrentAuthSession(this.deps.apiContext, {
 			user,
 			currentAuthSession: oldAuthSession,
 			request,
 		});
+		return {token: replacement.token, authSessionIdHash: replacement.newAuthSessionIdHash};
+	}
+
+	private async createSudoModeRequiredError(user: User): Promise<SudoModeRequiredError> {
+		const credentials = await this.deps.apiContext.services.users.listWebAuthnCredentials(user.id);
+		const hasPasskeyCredentials = credentials.length > 0;
+		const hasBackupCodes = await AuthMfa.hasUnconsumedBackupCodes(this.deps.apiContext, user.id);
+		return new SudoModeRequiredError(
+			userHasSudoCapability(user, hasPasskeyCredentials),
+			deriveSudoMethods(user, hasPasskeyCredentials, hasBackupCodes),
+		);
 	}
 
 	private async hashNewPassword(newPassword: string): Promise<string> {

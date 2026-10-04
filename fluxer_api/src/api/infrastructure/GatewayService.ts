@@ -1,37 +1,44 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {ChannelID, GuildID, MessageID, RoleID, UserID} from '@app/api/BrandedTypes';
+import {createChannelID, createGuildID, createRoleID, createUserID} from '@app/api/BrandedTypes';
+import {SYSTEM_USER_ID} from '@app/api/constants/Core';
+import type {GatewayDispatchEvent} from '@app/api/constants/Gateway';
+import {GatewayRpcClient} from '@app/api/infrastructure/GatewayRpcClient';
+import {GatewayRpcMethodError, GatewayRpcMethodErrorCodes} from '@app/api/infrastructure/GatewayRpcError';
+import {
+	type CallCaller,
+	type CallData,
+	callCallerRpcParams,
+	type GatewayChannelMention,
+	type GatewayGuildMemoryStats,
+	type GatewayMentionSources,
+	type GatewayMentionSourcesPage,
+	type GatewayNodeStats,
+	type GatewayVoiceStateCounts,
+	type GatewayVoiceStateEntry,
+	type GuildChannelAuthContext,
+} from '@app/api/infrastructure/IGatewayService';
+import {Logger} from '@app/api/Logger';
+import {APIErrorCodes} from '@fluxer/constants/src/ApiErrorCodes';
 import {CallAlreadyExistsError} from '@fluxer/errors/src/domains/channel/CallAlreadyExistsError';
 import {InvalidChannelTypeForCallError} from '@fluxer/errors/src/domains/channel/InvalidChannelTypeForCallError';
 import {NoActiveCallError} from '@fluxer/errors/src/domains/channel/NoActiveCallError';
 import {UnknownChannelError} from '@fluxer/errors/src/domains/channel/UnknownChannelError';
 import {BadGatewayError} from '@fluxer/errors/src/domains/core/BadGatewayError';
+import {BadRequestError} from '@fluxer/errors/src/domains/core/BadRequestError';
 import {GatewayTimeoutError} from '@fluxer/errors/src/domains/core/GatewayTimeoutError';
 import {MissingPermissionsError} from '@fluxer/errors/src/domains/core/MissingPermissionsError';
 import {ServiceUnavailableError} from '@fluxer/errors/src/domains/core/ServiceUnavailableError';
 import {UnknownGuildError} from '@fluxer/errors/src/domains/guild/UnknownGuildError';
 import {UserNotInVoiceError} from '@fluxer/errors/src/domains/user/UserNotInVoiceError';
+import type {ChannelResponse} from '@fluxer/schema/src/domains/channel/ChannelSchemas';
 import type {GuildMemberResponse} from '@fluxer/schema/src/domains/guild/GuildMemberSchemas';
 import type {GuildResponse} from '@fluxer/schema/src/domains/guild/GuildResponseSchemas';
 import {type UserActivity, UserActivitySchema} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import {ms} from 'itty-time';
-import type {ChannelID, GuildID, MessageID, RoleID, UserID} from '../BrandedTypes';
-import {createChannelID, createGuildID, createRoleID, createUserID} from '../BrandedTypes';
-import {SYSTEM_USER_ID} from '../constants/Core';
-import type {GatewayDispatchEvent} from '../constants/Gateway';
-import {Logger} from '../Logger';
-import {GatewayRpcClient} from './GatewayRpcClient';
-import {GatewayRpcMethodError, GatewayRpcMethodErrorCodes} from './GatewayRpcError';
-import type {
-	CallData,
-	GatewayActiveVoiceRooms,
-	GatewayChannelMention,
-	GatewayGuildMemoryStats,
-	GatewayMentionSources,
-	GatewayMentionSourcesPage,
-	GatewayNodeStats,
-	GatewayVoiceStateCounts,
-	GatewayVoiceStateEntry,
-} from './IGatewayService';
+
+const USER_PERMISSIONS_BATCH_SIZE = 100;
 
 const GATEWAY_ERROR_TO_DOMAIN_ERROR: Record<string, () => Error> = {
 	[GatewayRpcMethodErrorCodes.GUILD_NOT_FOUND]: () => new UnknownGuildError(),
@@ -44,6 +51,8 @@ const GATEWAY_ERROR_TO_DOMAIN_ERROR: Record<string, () => Error> = {
 	[GatewayRpcMethodErrorCodes.CONNECTION_NOT_FOUND]: () => new UserNotInVoiceError(),
 	[GatewayRpcMethodErrorCodes.MODERATOR_MISSING_CONNECT]: () => new MissingPermissionsError(),
 	[GatewayRpcMethodErrorCodes.TARGET_MISSING_CONNECT]: () => new MissingPermissionsError(),
+	[GatewayRpcMethodErrorCodes.INVALID_PARAMS]: () => new BadRequestError({code: APIErrorCodes.INVALID_FORM_BODY}),
+	[GatewayRpcMethodErrorCodes.BATCH_TOO_LARGE]: () => new BadRequestError({code: APIErrorCodes.INVALID_FORM_BODY}),
 };
 
 interface DispatchGuildParams {
@@ -58,14 +67,6 @@ interface DispatchPresenceParams {
 	data: unknown;
 }
 
-interface InvalidatePushBadgeCountParams {
-	userId: UserID;
-}
-
-interface InvalidatePushSubscriptionsParams {
-	userId: UserID;
-}
-
 interface ClearPushChannelNotificationsParams {
 	userId: UserID;
 	channelId: ChannelID;
@@ -75,6 +76,12 @@ interface ClearPushChannelNotificationsParams {
 interface GuildDataParams {
 	guildId: GuildID;
 	userId: UserID;
+}
+
+interface GuildAuthContextParams {
+	guildId: GuildID;
+	userId: UserID;
+	channelId?: ChannelID;
 }
 
 interface GuildMemberParams {
@@ -227,6 +234,11 @@ interface GuildMemberRpcResponse {
 	member_data?: GuildMemberResponse;
 }
 
+interface GuildAuthContextRpcResponse {
+	guild: GuildResponse;
+	parent_channel?: ChannelResponse | null;
+}
+
 type PendingRequest<T> = {
 	resolve: (value: T) => void;
 	reject: (error: Error) => void;
@@ -247,17 +259,22 @@ export class GatewayService {
 		>
 	>();
 	private pendingPermissionRequests = new Map<string, Array<PendingRequest<boolean>>>();
+	private pendingAuthContextRequests = new Map<string, Array<PendingRequest<GuildChannelAuthContext>>>();
 	private pendingBatchRequestCount = 0;
 	private guildDataBatchTimeout: NodeJS.Timeout | null = null;
 	private guildMemberBatchTimeout: NodeJS.Timeout | null = null;
 	private permissionBatchTimeout: NodeJS.Timeout | null = null;
+	private authContextBatchTimeout: NodeJS.Timeout | null = null;
 	private activeGuildDataRequests = 0;
 	private activeGuildMemberRequests = 0;
 	private activePermissionRequests = 0;
+	private activeAuthContextRequests = 0;
+	private authContextUnsupportedUntil = 0;
 	private readonly BATCH_DELAY_MS = ms('5 milliseconds');
 	private readonly MAX_PENDING_BATCH_REQUESTS = 2000;
 	private readonly MAX_BATCH_CONCURRENCY = 50;
 	private readonly PENDING_REQUEST_TIMEOUT_MS = ms('30 seconds');
+	private readonly AUTH_CONTEXT_FALLBACK_MS = ms('5 minutes');
 
 	constructor() {
 		this.rpcClient = GatewayRpcClient.getInstance();
@@ -279,6 +296,9 @@ export class GatewayService {
 			}
 			if (error.code === GatewayRpcMethodErrorCodes.TIMEOUT) {
 				return new GatewayTimeoutError();
+			}
+			if (error.code === GatewayRpcMethodErrorCodes.GUILD_OVERLOADED) {
+				return new ServiceUnavailableError({headers: {'Retry-After': '1'}});
 			}
 			if (error.code === GatewayRpcMethodErrorCodes.OVERLOADED) {
 				return new ServiceUnavailableError();
@@ -368,6 +388,16 @@ export class GatewayService {
 		this.permissionBatchTimeout = setTimeout(() => {
 			this.permissionBatchTimeout = null;
 			this.processPermissionQueue();
+		}, this.BATCH_DELAY_MS);
+	}
+
+	private scheduleAuthContextBatch(): void {
+		if (this.authContextBatchTimeout || this.activeAuthContextRequests >= this.MAX_BATCH_CONCURRENCY) {
+			return;
+		}
+		this.authContextBatchTimeout = setTimeout(() => {
+			this.authContextBatchTimeout = null;
+			this.processAuthContextQueue();
 		}, this.BATCH_DELAY_MS);
 	}
 
@@ -477,10 +507,41 @@ export class GatewayService {
 		for (const pendingRequests of this.pendingPermissionRequests.values()) {
 			this.rejectPendingRequests(pendingRequests, error);
 		}
+		for (const pendingRequests of this.pendingAuthContextRequests.values()) {
+			this.rejectPendingRequests(pendingRequests, error);
+		}
 		this.pendingGuildDataRequests.clear();
 		this.pendingGuildMemberRequests.clear();
 		this.pendingPermissionRequests.clear();
+		this.pendingAuthContextRequests.clear();
 		this.pendingBatchRequestCount = 0;
+	}
+
+	private processAuthContextQueue(): void {
+		const availableSlots = this.MAX_BATCH_CONCURRENCY - this.activeAuthContextRequests;
+		if (availableSlots <= 0) {
+			return;
+		}
+		const entries = this.takePendingEntries(this.pendingAuthContextRequests, availableSlots);
+		if (entries.length === 0) {
+			return;
+		}
+		const totalAuthContextRequests = entries.reduce((sum, [, pending]) => sum + pending.length, 0);
+		Logger.debug(
+			`[gateway-batch] Processing guild.get_auth_context batch: ${entries.length} unique requests (${totalAuthContextRequests} total)`,
+		);
+		for (const entry of entries) {
+			this.activeAuthContextRequests += 1;
+			void this.processAuthContextEntry(entry).finally(() => {
+				this.activeAuthContextRequests = Math.max(0, this.activeAuthContextRequests - 1);
+				if (this.pendingAuthContextRequests.size > 0) {
+					this.scheduleAuthContextBatch();
+				}
+			});
+		}
+		if (this.pendingAuthContextRequests.size > 0) {
+			this.scheduleAuthContextBatch();
+		}
 	}
 
 	private async processGuildDataEntry([key, pending]: [string, Array<PendingRequest<GuildResponse>>]): Promise<void> {
@@ -554,6 +615,65 @@ export class GatewayService {
 		}
 	}
 
+	private async processAuthContextEntry([key, pending]: [
+		string,
+		Array<PendingRequest<GuildChannelAuthContext>>,
+	]): Promise<void> {
+		const [guildIdStr, userIdStr, channelIdStr] = key.split('-');
+		const guildId = BigInt(guildIdStr) as GuildID;
+		const userId = BigInt(userIdStr) as UserID;
+		const channelId = channelIdStr !== '0' ? (BigInt(channelIdStr) as ChannelID) : undefined;
+		try {
+			const result = await this.call<GuildAuthContextRpcResponse>('guild.get_auth_context', {
+				guild_id: guildId.toString(),
+				user_id: userId.toString(),
+				channel_id: channelId ? channelId.toString() : null,
+			});
+			this.resolvePendingRequests(pending, {
+				guild: result.guild,
+				parentChannel: result.parent_channel ?? null,
+			});
+		} catch (error) {
+			const transformedError = this.transformGatewayError(error);
+			if (!this.isAuthContextUnsupportedError(transformedError)) {
+				this.rejectPendingRequests(pending, transformedError);
+				this.logBatchFailures('guild.get_auth_context', [{status: 'rejected', reason: error}]);
+				return;
+			}
+			this.authContextUnsupportedUntil = Date.now() + this.AUTH_CONTEXT_FALLBACK_MS;
+			Logger.warn({error}, '[gateway-rpc] guild.get_auth_context unavailable, falling back to guild.get_data');
+			await this.settleAuthContextFromGuildData({guildId, userId, channelId}, pending);
+		}
+	}
+
+	private isAuthContextUnsupportedError(error: Error): boolean {
+		return error instanceof BadGatewayError || error instanceof GatewayTimeoutError;
+	}
+
+	private async settleAuthContextFromGuildData(
+		params: GuildAuthContextParams,
+		pending: Array<PendingRequest<GuildChannelAuthContext>>,
+	): Promise<void> {
+		try {
+			this.resolvePendingRequests(pending, await this.getGuildAuthContextFromGuildData(params));
+		} catch (error) {
+			const transformedError = this.transformGatewayError(error);
+			this.rejectPendingRequests(pending, transformedError);
+			this.logBatchFailures('guild.get_data', [{status: 'rejected', reason: error}]);
+		}
+	}
+
+	private async getGuildAuthContextFromGuildData({
+		guildId,
+		userId,
+		channelId,
+	}: GuildAuthContextParams): Promise<GuildChannelAuthContext> {
+		const guild = await this.getGuildData({guildId, userId});
+		const parentId = channelId?.toString();
+		const parentChannel = parentId ? (guild.channels?.find((channel) => channel.id === parentId) ?? null) : null;
+		return {guild, parentChannel};
+	}
+
 	async dispatchGuild({guildId, event, data}: DispatchGuildParams): Promise<void> {
 		await this.call('guild.dispatch', {
 			guild_id: guildId.toString(),
@@ -570,18 +690,6 @@ export class GatewayService {
 			user_id: userId.toString(),
 			event,
 			data,
-		});
-	}
-
-	async invalidatePushBadgeCount({userId}: InvalidatePushBadgeCountParams): Promise<void> {
-		await this.call('push.invalidate_badge_count', {
-			user_id: userId.toString(),
-		});
-	}
-
-	async invalidatePushSubscriptions({userId}: InvalidatePushSubscriptionsParams): Promise<void> {
-		await this.call('push.invalidate_subscriptions', {
-			user_id: userId.toString(),
 		});
 	}
 
@@ -606,11 +714,29 @@ export class GatewayService {
 		guildId: GuildID;
 		settings: unknown;
 	}): Promise<void> {
-		await this.call('push.sync_user_guild_settings', {
-			user_id: userId.toString(),
-			guild_id: guildId.toString(),
-			user_guild_settings: settings,
-		});
+		try {
+			await this.rpcClient.call('push.sync_user_guild_settings', {
+				user_id: userId.toString(),
+				guild_id: guildId.toString(),
+				user_guild_settings: settings,
+			});
+		} catch (error) {
+			if (!this.isPrivateScopeSyncUnsupportedError(guildId, error)) {
+				throw this.transformGatewayError(error);
+			}
+			Logger.warn(
+				{userId: userId.toString()},
+				'[gateway-rpc] push.sync_user_guild_settings rejected the private scope, gateway predates it',
+			);
+		}
+	}
+
+	private isPrivateScopeSyncUnsupportedError(guildId: GuildID, error: unknown): boolean {
+		return (
+			guildId === createGuildID(0n) &&
+			error instanceof GatewayRpcMethodError &&
+			error.code === GatewayRpcMethodErrorCodes.INVALID_PARAMS
+		);
 	}
 
 	async getGuildCounts(guildId: GuildID): Promise<{
@@ -694,6 +820,48 @@ export class GatewayService {
 			);
 			this.scheduleGuildDataBatch();
 		});
+	}
+
+	async getGuildAuthContext({guildId, userId, channelId}: GuildAuthContextParams): Promise<GuildChannelAuthContext> {
+		if (Date.now() < this.authContextUnsupportedUntil) {
+			return await this.getGuildAuthContextFromGuildData({guildId, userId, channelId});
+		}
+		const key = `${guildId.toString()}-${userId.toString()}-${channelId ? channelId.toString() : '0'}`;
+		return new Promise<GuildChannelAuthContext>((resolve, reject) => {
+			if (this.pendingBatchRequestCount >= this.MAX_PENDING_BATCH_REQUESTS) {
+				reject(new ServiceUnavailableError());
+				return;
+			}
+			const pendingRequest: PendingRequest<GuildChannelAuthContext> = {
+				resolve,
+				reject,
+				settled: false,
+				timeoutId: null,
+			};
+			pendingRequest.timeoutId = setTimeout(() => {
+				const error = new GatewayTimeoutError();
+				this.rejectPendingRequests([pendingRequest], error);
+				this.removePendingAuthContextRequest(key, pendingRequest);
+			}, this.PENDING_REQUEST_TIMEOUT_MS);
+			const pending = this.pendingAuthContextRequests.get(key) || [];
+			pending.push(pendingRequest);
+			this.pendingAuthContextRequests.set(key, pending);
+			this.pendingBatchRequestCount += 1;
+			this.scheduleAuthContextBatch();
+		});
+	}
+
+	private removePendingAuthContextRequest(key: string, request: PendingRequest<GuildChannelAuthContext>): void {
+		const pending = this.pendingAuthContextRequests.get(key);
+		if (pending) {
+			const index = pending.indexOf(request);
+			if (index >= 0) {
+				pending.splice(index, 1);
+				if (pending.length === 0) {
+					this.pendingAuthContextRequests.delete(key);
+				}
+			}
+		}
 	}
 
 	private removePendingGuildDataRequest(key: string, request: PendingRequest<GuildResponse>): void {
@@ -865,26 +1033,6 @@ export class GatewayService {
 		};
 	}
 
-	async getActiveVoiceRooms(): Promise<GatewayActiveVoiceRooms> {
-		const result = await this.call<{
-			rooms?: Array<{
-				guild_id?: string | null;
-				channel_id: string;
-				voice_state_count?: number;
-			}>;
-			node_count?: number;
-		}>('process.active_voice_rooms', {});
-		return {
-			nodeCount: result.node_count ?? 0,
-			rooms: (result.rooms ?? []).map((room) => ({
-				guildId:
-					room.guild_id === undefined || room.guild_id === null ? undefined : createGuildID(BigInt(room.guild_id)),
-				channelId: createChannelID(BigInt(room.channel_id)),
-				voiceStateCount: room.voice_state_count ?? 0,
-			})),
-		};
-	}
-
 	async getUserPermissions({guildId, userId, channelId}: UserPermissionsParams): Promise<bigint> {
 		const result = await this.call<{
 			permissions: string;
@@ -909,19 +1057,29 @@ export class GatewayService {
 		if (guildIds.length === 0) {
 			return permissionsMap;
 		}
-		const result = await this.call<{
-			permissions: Array<{
-				guild_id: string;
-				permissions: string;
-			}>;
-		}>('guild.get_user_permissions_batch', {
-			guild_ids: guildIds.map((id) => id.toString()),
-			user_id: userId.toString(),
-			channel_id: channelId ? channelId.toString() : '0',
-		});
-		for (const item of result.permissions) {
-			const guildId = BigInt(item.guild_id) as GuildID;
-			permissionsMap.set(guildId, BigInt(item.permissions));
+		const batches: Array<Array<GuildID>> = [];
+		for (let index = 0; index < guildIds.length; index += USER_PERMISSIONS_BATCH_SIZE) {
+			batches.push(guildIds.slice(index, index + USER_PERMISSIONS_BATCH_SIZE));
+		}
+		const results = await Promise.all(
+			batches.map((batch) =>
+				this.call<{
+					permissions: Array<{
+						guild_id: string;
+						permissions: string;
+					}>;
+				}>('guild.get_user_permissions_batch', {
+					guild_ids: batch.map((id) => id.toString()),
+					user_id: userId.toString(),
+					channel_id: channelId ? channelId.toString() : '0',
+				}),
+			),
+		);
+		for (const result of results) {
+			for (const item of result.permissions) {
+				const guildId = BigInt(item.guild_id) as GuildID;
+				permissionsMap.set(guildId, BigInt(item.permissions));
+			}
 		}
 		return permissionsMap;
 	}
@@ -1468,41 +1626,6 @@ export class GatewayService {
 		};
 	}
 
-	async repairVoiceStateFromCache({
-		guildId,
-		channelId,
-		userId,
-		connectionId,
-	}: {
-		guildId?: GuildID;
-		channelId: ChannelID;
-		userId: UserID;
-		connectionId: string;
-	}): Promise<{
-		success: boolean;
-		repaired?: boolean;
-		error?: string;
-	}> {
-		const params: Record<string, string> = {
-			channel_id: channelId.toString(),
-			user_id: userId.toString(),
-			connection_id: connectionId,
-		};
-		if (guildId !== undefined) {
-			params['guild_id'] = guildId.toString();
-		}
-		const result = await this.call<{
-			success: boolean;
-			repaired?: boolean;
-			error?: string;
-		}>('voice.repair_state_from_cache', params);
-		return {
-			success: result.success,
-			repaired: result.repaired,
-			error: result.error,
-		};
-	}
-
 	async getVoiceStatesForChannel({guildId, channelId}: {guildId?: GuildID; channelId: ChannelID}): Promise<{
 		voiceStates: Array<GatewayVoiceStateEntry>;
 	}> {
@@ -1570,6 +1693,7 @@ export class GatewayService {
 		region: string,
 		ringing: Array<string>,
 		recipients: Array<string>,
+		caller?: CallCaller,
 	): Promise<CallData> {
 		return this.call<CallData>('call.create', {
 			channel_id: channelId.toString(),
@@ -1577,6 +1701,7 @@ export class GatewayService {
 			region,
 			ringing,
 			recipients,
+			...callCallerRpcParams(caller),
 		});
 	}
 
@@ -1584,8 +1709,12 @@ export class GatewayService {
 		return this.call<boolean>('call.update_region', {channel_id: channelId.toString(), region});
 	}
 
-	async ringCallRecipients(channelId: ChannelID, recipients: Array<string>): Promise<boolean> {
-		return this.call<boolean>('call.ring', {channel_id: channelId.toString(), recipients});
+	async ringCallRecipients(channelId: ChannelID, recipients: Array<string>, caller?: CallCaller): Promise<boolean> {
+		return this.call<boolean>('call.ring', {
+			channel_id: channelId.toString(),
+			recipients,
+			...callCallerRpcParams(caller),
+		});
 	}
 
 	async stopRingingCallRecipients(channelId: ChannelID, recipients: Array<string>): Promise<boolean> {
@@ -1662,6 +1791,10 @@ export class GatewayService {
 		if (this.permissionBatchTimeout) {
 			clearTimeout(this.permissionBatchTimeout);
 			this.permissionBatchTimeout = null;
+		}
+		if (this.authContextBatchTimeout) {
+			clearTimeout(this.authContextBatchTimeout);
+			this.authContextBatchTimeout = null;
 		}
 		this.rejectAllPendingBatchRequests(new ServiceUnavailableError());
 	}

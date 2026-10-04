@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {APIConfig, BlueskyOAuthConfig} from '@app/api/config/APIConfig';
+import {parseIpBanEntry} from '@app/api/utils/IpRangeUtils';
+import type {WorkerTaskName} from '@app/api/worker/WorkerLaneConfig';
 import type {MasterConfig} from '@fluxer/config/src/MasterConfig';
+import {parseIpAddress} from '@fluxer/ip_utils/src/IpAddress';
 import {parseGeoipSourceConfig, resolveGeoipRuntimeSourceConfig} from '@pkgs/geoip/src/GeoipStartup';
-import type {APIConfig, BlueskyOAuthConfig} from './config/APIConfig';
-import type {WorkerTaskName} from './worker/WorkerLaneConfig';
 
 function extractHostname(url: string): string {
 	try {
@@ -17,30 +19,35 @@ function trimTrailingSlash(url: string): string {
 	return url.replace(/\/+$/u, '');
 }
 
-function resolveGatewayInternalUrl(master: MasterConfig): string {
-	const configuredInternalGateway = (
-		master.internal as {
-			gateway?: string;
-		}
-	).gateway;
-	if (typeof configuredInternalGateway === 'string' && configuredInternalGateway.length > 0) {
-		return trimTrailingSlash(configuredInternalGateway);
-	}
+function resolveEmailAppBaseUrl(master: MasterConfig): string {
+	const configuredAppBaseUrl = master.integrations.email.app_base_url.trim();
+	if (!configuredAppBaseUrl) return trimTrailingSlash(master.endpoints.app);
 	try {
-		const gatewayUrl = new URL(master.endpoints.gateway);
-		if (gatewayUrl.protocol === 'ws:') {
-			gatewayUrl.protocol = 'http:';
-		} else if (gatewayUrl.protocol === 'wss:') {
-			gatewayUrl.protocol = 'https:';
+		const appBaseUrl = new URL(configuredAppBaseUrl);
+		if (
+			(appBaseUrl.protocol !== 'http:' && appBaseUrl.protocol !== 'https:') ||
+			appBaseUrl.username ||
+			appBaseUrl.password ||
+			appBaseUrl.search ||
+			appBaseUrl.hash
+		) {
+			throw new Error(`Invalid email app base URL: ${configuredAppBaseUrl}`);
 		}
-		return trimTrailingSlash(gatewayUrl.toString());
+		return trimTrailingSlash(appBaseUrl.toString());
 	} catch {
-		throw new Error(`Invalid gateway endpoint URL: ${master.endpoints.gateway}`);
+		throw new Error(`Invalid email app base URL: ${configuredAppBaseUrl}`);
 	}
 }
 
 function isBoolean(value: unknown): value is boolean {
 	return typeof value === 'boolean';
+}
+
+function resolveValidateResponses(master: MasterConfig): boolean {
+	if (isBoolean(master.dev.validate_responses)) {
+		return master.dev.validate_responses;
+	}
+	return master.env !== 'production';
 }
 
 function resolveTrustClientIpHeader(proxyConfig: object): boolean {
@@ -51,26 +58,44 @@ function resolveTrustClientIpHeader(proxyConfig: object): boolean {
 	return false;
 }
 
-function mapPushProviderApps(
+function normalizeIpBanExemptIps(values: Array<string>): Array<string> {
+	const normalized = new Set<string>();
+	for (const value of values) {
+		if (value.includes('/')) {
+			const range = parseIpBanEntry(value);
+			if (range?.type !== 'range') {
+				throw new Error(`FLUXER_API_IP_BAN_EXEMPT_IPS contains an invalid CIDR range: ${value}`);
+			}
+			normalized.add(range.canonical);
+			continue;
+		}
+		const parsed = parseIpAddress(value);
+		if (!parsed) {
+			throw new Error(`FLUXER_API_IP_BAN_EXEMPT_IPS contains an invalid IP address: ${value}`);
+		}
+		normalized.add(parsed.normalized);
+	}
+	return Array.from(normalized);
+}
+
+function mapApnsApps(
 	apps:
 		| Array<{
 				app_id?: string;
 				topic?: string;
 				environment?: 'production' | 'development';
-				project_id?: string;
 		  }>
 		| undefined,
 ): APIConfig['push']['apns']['apps'] {
-	return (apps ?? []).flatMap((app) => {
-		if (!app.app_id) return [];
-		return [
-			{
-				appId: app.app_id,
-				topic: app.topic,
-				environment: app.environment,
-				projectId: app.project_id,
-			},
-		];
+	return (apps ?? []).map((app) => {
+		if (!app.app_id) {
+			throw new Error('FLUXER_PUSH_APNS_APPS contains an entry with no app_id');
+		}
+		return {
+			appId: app.app_id,
+			topic: app.topic,
+			environment: app.environment,
+		};
 	});
 }
 
@@ -86,17 +111,25 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 		serviceName: 'api',
 	});
 	const uploadRelayConfig = master.services.media_proxy.upload_relay;
-	const uploadRelaySecretBase64 = process.env.FLUXER_MEDIA_PROXY_UPLOAD_RELAY_SECRET_BASE64 ?? '';
+	const uploadRelaySecretBase64 = uploadRelayConfig.secret_base64;
+	if (uploadRelaySecretBase64.length === 0) {
+		throw new Error('FLUXER_MEDIA_PROXY_UPLOAD_RELAY_SECRET_BASE64 is required for the API');
+	}
+	if (Buffer.from(uploadRelaySecretBase64, 'base64').length < 32) {
+		throw new Error('FLUXER_MEDIA_PROXY_UPLOAD_RELAY_SECRET_BASE64 must decode to at least 32 bytes');
+	}
+	const donationProxyKey = (master.services.api.donation_proxy_key ?? '').trim();
+	if (donationProxyKey.length > 0 && donationProxyKey.length < 32) {
+		throw new Error('FLUXER_API_DONATION_PROXY_KEY must be at least 32 characters');
+	}
 	if (!s3Config) {
 		throw new Error('S3 configuration is required for the API');
 	}
 	const s3Buckets = s3Config.buckets ?? {
 		cdn: '',
 		uploads: '',
-		downloads: '',
 		reports: '',
 		harvests: '',
-		static: '',
 	};
 	if (master.database.backend === 'cassandra' && !cassandraSource) {
 		throw new Error('Cassandra configuration is required.');
@@ -107,6 +140,10 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 	return {
 		nodeEnv: master.env === 'test' ? 'development' : master.env,
 		port: master.services.api.port,
+		headersTimeoutMs: master.services.api.headers_timeout_ms,
+		requestTimeoutMs: master.services.api.request_timeout_ms,
+		maxInflightRequests: master.services.api.max_inflight_requests,
+		ipBanExemptIps: normalizeIpBanExemptIps(master.services.api.ip_ban_exempt_ips),
 		cassandra: {
 			hosts: cassandraSource?.hosts.join(',') ?? '',
 			port: cassandraSource?.port ?? 9042,
@@ -126,44 +163,24 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 			sslCa: postgresSource?.ssl_ca ?? '',
 			maxConnections: postgresSource?.max_connections ?? 20,
 			kvTable: postgresSource?.kv_table ?? 'fluxer_kv',
+			preparedStatements: postgresSource?.prepared_statements ?? true,
 		},
 		database: {
 			backend: master.database.backend,
 		},
 		kv: {
-			provider: 'redis' as const,
 			url: master.internal.kv,
-			mode: ((
-				master.internal as {
-					kv_mode?: string;
-				}
-			).kv_mode ?? 'standalone') as 'standalone' | 'cluster',
-			clusterNodes:
-				(
-					master.internal as {
-						kv_cluster_nodes?: Array<{
-							host: string;
-							port: number;
-						}>;
-					}
-				).kv_cluster_nodes ?? [],
-			clusterNatMap:
-				(
-					master.internal as {
-						kv_cluster_nat_map?: Record<
-							string,
-							{
-								host: string;
-								port: number;
-							}
-						>;
-					}
-				).kv_cluster_nat_map ?? {},
+			mode: master.internal.kv_mode,
 		},
 		nats: {
 			coreUrl: master.services.nats?.core_url ?? 'nats://127.0.0.1:4222',
 			jetStreamUrl: master.services.nats?.jetstream_url ?? 'nats://127.0.0.1:4223',
 			authToken: master.services.nats?.auth_token ?? '',
+		},
+		storageChangeFeed: {
+			enabled: master.services.api.storage_change_feed?.enabled ?? false,
+			stream: master.services.api.storage_change_feed?.stream ?? 'STORAGE_CHANGES',
+			skipBuckets: master.services.api.storage_change_feed?.skip_buckets ?? [s3Buckets.uploads],
 		},
 		search: {
 			engine: master.integrations.search?.engine ?? 'elasticsearch',
@@ -186,6 +203,9 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 				tokenTtlSecs: uploadRelayConfig.token_ttl_secs,
 				keepDirectCountries: uploadRelayConfig.keep_direct_countries,
 			},
+			attachmentUrls: {
+				secretsBase64: master.services.media_proxy.attachment_urls.secrets_base64,
+			},
 		},
 		geoip: geoipSourceConfig,
 		proxy: {
@@ -196,6 +216,7 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 			apiPublic: master.endpoints.api,
 			apiClient: master.endpoints.api_client,
 			webApp: master.endpoints.app,
+			webAppOrigins: [...new Set([new URL(master.endpoints.app).origin, ...master.services.api.app_origin_aliases])],
 			gateway: master.endpoints.gateway,
 			media: master.endpoints.media,
 			marketing: master.endpoints.marketing,
@@ -205,23 +226,12 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 			staticCdn: master.endpoints.static_cdn,
 		},
 		internal: {
-			gateway: resolveGatewayInternalUrl(master),
 			gatewayRpcAuthToken: master.services.gateway.rpc_auth_token ?? '',
+			donationProxyKey,
 		},
 		hosts: {
-			invite: extractHostname(master.endpoints.invite),
-			gift: extractHostname(master.endpoints.gift),
 			marketing: extractHostname(master.endpoints.marketing),
 			unfurlIgnored: master.services.api.unfurl_ignored_hosts,
-		},
-		embeds: {
-			oEmbedHtmlEnabled: master.services.api.embeds.oembed_html_enabled,
-			oEmbedHtmlAllowUntrustedOnSelfHosted: master.services.api.embeds.oembed_html_allow_untrusted_on_self_hosted,
-			oEmbedHtmlAllowedHosts: master.services.api.embeds.oembed_html_allowed_hosts,
-			cacheDefaultTtlSeconds: master.services.api.embeds.cache_default_ttl_seconds,
-			cacheMaxTtlSeconds: master.services.api.embeds.cache_max_ttl_seconds,
-			cacheMinTtlSeconds: master.services.api.embeds.cache_min_ttl_seconds,
-			cacheRespectRemoteTtl: master.services.api.embeds.cache_respect_remote_ttl,
 		},
 		s3: {
 			endpoint: s3Config.endpoint,
@@ -238,6 +248,8 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 			webhookSecret: master.integrations.email.webhook_secret ?? undefined,
 			fromEmail: master.integrations.email.from_email,
 			fromName: master.integrations.email.from_name,
+			replyToEmail: master.integrations.email.reply_to_email,
+			appBaseUrl: resolveEmailAppBaseUrl(master),
 			smtp: master.integrations.email.smtp
 				? {
 						host: master.integrations.email.smtp.host,
@@ -248,45 +260,18 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 					}
 				: undefined,
 		},
-		sms: {
-			enabled: master.integrations.sms.enabled,
-			accountSid: master.integrations.sms.account_sid,
-			authToken: master.integrations.sms.auth_token,
-			verifyServiceSid: master.integrations.sms.verify_service_sid,
-			inboundChallengeNumber: master.integrations.sms.inbound_challenge_number || undefined,
-			inboundWebhookAuthToken: master.integrations.sms.inbound_webhook_auth_token || master.integrations.sms.auth_token,
-			inboundWebhookPublicUrl: master.integrations.sms.inbound_webhook_public_url || undefined,
+		blocklistFeeds: {
+			enabled: master.integrations.blocklist_feeds.enabled ?? !master.instance.self_hosted,
 		},
-		risk: {
-			enabled: master.integrations.risk_integration.enabled,
-			ipinfoApiKey: master.integrations.risk_integration.ipinfo_api_key || undefined,
-			accountPolicyDsl: master.integrations.risk_integration.account_policy_dsl,
-		},
-		captcha: {
-			enabled: master.integrations.captcha.enabled,
-			provider: master.integrations.captcha.provider,
-			hcaptcha: master.integrations.captcha.hcaptcha
-				? {
-						siteKey: master.integrations.captcha.hcaptcha.site_key,
-						secretKey: master.integrations.captcha.hcaptcha.secret_key,
-					}
-				: undefined,
-			turnstile: master.integrations.captcha.turnstile
-				? {
-						siteKey: master.integrations.captcha.turnstile.site_key,
-						secretKey: master.integrations.captcha.turnstile.secret_key,
-					}
-				: undefined,
-		},
-		contentModeration: {
-			nsfwThreshold: master.services.api.content_moderation?.nsfw_threshold ?? 0.7,
+		breachedPasswordCheck: {
+			enabled: master.integrations.breached_password_check.enabled ?? !master.instance.self_hosted,
 		},
 		voice: {
 			enabled: master.integrations.voice.enabled,
 			apiKey: master.integrations.voice.api_key,
 			apiSecret: master.integrations.voice.api_secret,
-			webhookUrl: master.integrations.voice.webhook_url,
 			url: master.integrations.voice.url,
+			internalUrl: master.integrations.voice.internal_url,
 			defaultRegion: master.integrations.voice.default_region,
 		},
 		stripe: {
@@ -298,17 +283,29 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 						monthlyUsd: master.integrations.stripe.prices.monthly_usd,
 						monthlyEur: master.integrations.stripe.prices.monthly_eur,
 						monthlyBrl: master.integrations.stripe.prices.monthly_brl,
+						monthlyDkk: master.integrations.stripe.prices.monthly_dkk,
 						monthlyInr: master.integrations.stripe.prices.monthly_inr,
+						monthlyNok: master.integrations.stripe.prices.monthly_nok,
 						monthlyPln: master.integrations.stripe.prices.monthly_pln,
+						monthlySek: master.integrations.stripe.prices.monthly_sek,
 						monthlyTry: master.integrations.stripe.prices.monthly_try,
 						yearlyUsd: master.integrations.stripe.prices.yearly_usd,
 						yearlyEur: master.integrations.stripe.prices.yearly_eur,
 						yearlyBrl: master.integrations.stripe.prices.yearly_brl,
+						yearlyDkk: master.integrations.stripe.prices.yearly_dkk,
 						yearlyInr: master.integrations.stripe.prices.yearly_inr,
+						yearlyNok: master.integrations.stripe.prices.yearly_nok,
 						yearlyPln: master.integrations.stripe.prices.yearly_pln,
+						yearlySek: master.integrations.stripe.prices.yearly_sek,
 						yearlyTry: master.integrations.stripe.prices.yearly_try,
 						gift1MonthUsd: master.integrations.stripe.prices.gift_1_month_usd,
 						gift1MonthEur: master.integrations.stripe.prices.gift_1_month_eur,
+						gift1MonthSek: master.integrations.stripe.prices.gift_1_month_sek,
+						gift1YearSek: master.integrations.stripe.prices.gift_1_year_sek,
+						gift1MonthDkk: master.integrations.stripe.prices.gift_1_month_dkk,
+						gift1YearDkk: master.integrations.stripe.prices.gift_1_year_dkk,
+						gift1MonthNok: master.integrations.stripe.prices.gift_1_month_nok,
+						gift1YearNok: master.integrations.stripe.prices.gift_1_year_nok,
 						gift1MonthBrl: master.integrations.stripe.prices.gift_1_month_brl,
 						gift1MonthInr: master.integrations.stripe.prices.gift_1_month_inr,
 						gift1MonthPln: master.integrations.stripe.prices.gift_1_month_pln,
@@ -321,11 +318,15 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 						gift1YearTry: master.integrations.stripe.prices.gift_1_year_try,
 					}
 				: undefined,
+			legacyPrices: master.integrations.stripe.legacy_prices,
 		},
-		bunny: {
-			purgeEnabled: master.integrations.bunny.purge_enabled,
-			apiKey: master.integrations.bunny.api_key,
-			pullZoneId: master.integrations.bunny.pull_zone_id,
+		cachePurge: {
+			adapter: master.integrations.cache_purge.adapter,
+			http: {
+				endpoint: master.integrations.cache_purge.http.endpoint,
+				token: master.integrations.cache_purge.http.token,
+				timeoutMs: master.integrations.cache_purge.http.timeout_ms,
+			},
 		},
 		clamav: {
 			enabled: master.integrations.clamav.enabled,
@@ -341,12 +342,12 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 			reporterEmail: master.integrations.ncmec.reporter_email ?? '',
 		},
 		admin: {
-			basePath: master.services.admin.base_path,
 			oauthClientSecret: master.services.admin.oauth_client_secret,
 		},
 		auth: {
 			sudoModeSecret: master.auth.sudo_mode_secret,
 			connectionInitiationSecret: master.auth.connection_initiation_secret,
+			ssoAllowPrivateAddresses: master.auth.sso_allow_private_addresses,
 			passkeys: {
 				rpName: master.auth.passkeys.rp_name,
 				rpId: master.auth.passkeys.rp_id,
@@ -359,7 +360,6 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 			},
 			bluesky: master.auth.bluesky as BlueskyOAuthConfig,
 		},
-		cookie: master.cookie,
 		klipy: {
 			apiKey: master.integrations.klipy.api_key,
 		},
@@ -379,26 +379,12 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 				wordmarkUrl: master.instance.branding.wordmark_url,
 				faviconUrl: master.instance.branding.favicon_url,
 				themeColor: master.instance.branding.theme_color,
+				statusPageUrl: master.instance.branding.status_page_url,
+				statusPageIncidentHistoryUrl: master.instance.branding.status_page_incident_history_url,
 			},
 			setup: {
 				configured: master.instance.setup.configured,
 			},
-		},
-		abusePolicy: {
-			inboundPhoneCountryCodes: master.instance.abuse_policy.inbound_phone_country_codes,
-			phoneVerification: {
-				inboundRequiredPrefixes: master.instance.abuse_policy.phone_verification.inbound_required_prefixes,
-			},
-			directContactSpam: {
-				enabled: master.instance.abuse_policy.direct_contact_spam.enabled,
-				countryCodes: master.instance.abuse_policy.direct_contact_spam.country_codes,
-				distinctTargetThreshold: master.instance.abuse_policy.direct_contact_spam.distinct_target_threshold,
-				targetWindowMs: master.instance.abuse_policy.direct_contact_spam.target_window_ms,
-				action: master.instance.abuse_policy.direct_contact_spam.action,
-			},
-		},
-		domain: {
-			baseDomain: master.domain.base_domain,
 		},
 		discovery: {
 			enabled: master.discovery.enabled,
@@ -409,8 +395,10 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 			disableRateLimits: master.dev.disable_rate_limits,
 			testModeEnabled: master.dev.test_mode_enabled,
 			testHarnessToken: master.dev.test_harness_token,
+			validateResponses: resolveValidateResponses(master),
 		},
 		presignedAttachmentUploadsEnabled: master.services.api.presigned_attachment_uploads_enabled ?? false,
+		presignedHarvestDownloadsEnabled: master.services.api.presigned_harvest_downloads_enabled ?? true,
 		attachmentDecayEnabled: master.attachment_decay_enabled,
 		deletionGracePeriodHours: master.dev.test_mode_enabled ? 0.01 : master.deletion_grace_period_hours,
 		inactivityDeletionThresholdDays: master.inactivity_deletion_threshold_days,
@@ -422,33 +410,64 @@ export function buildAPIConfigFromMaster(master: MasterConfig): APIConfig {
 				keyId: master.integrations.push.apns.key_id,
 				privateKey: master.integrations.push.apns.private_key,
 				privateKeyPath: master.integrations.push.apns.private_key_path,
-				defaultEnvironment: master.integrations.push.apns.default_environment ?? 'production',
-				apps: mapPushProviderApps(master.integrations.push.apns.apps),
+				apps: mapApnsApps(master.integrations.push.apns.apps),
 			},
-			fcm: {
-				enabled: master.integrations.push.fcm.enabled,
-				projectId: master.integrations.push.fcm.project_id,
-				clientEmail: master.integrations.push.fcm.client_email,
-				privateKey: master.integrations.push.fcm.private_key,
-				privateKeyPath: master.integrations.push.fcm.private_key_path,
-				serviceAccountJsonPath: master.integrations.push.fcm.service_account_json_path,
-				tokenUri: master.integrations.push.fcm.token_uri ?? 'https://oauth2.googleapis.com/token',
-				apps: mapPushProviderApps(master.integrations.push.fcm.apps),
-			},
+		},
+		appStore: {
+			enabled: master.integrations.app_store.enabled,
+			issuerId: master.integrations.app_store.issuer_id,
+			keyId: master.integrations.app_store.key_id,
+			privateKey: master.integrations.app_store.private_key,
+			privateKeyPath: master.integrations.app_store.private_key_path,
+			apps: (master.integrations.app_store.apps ?? []).map((app) => ({
+				bundleId: app.bundle_id,
+				appAppleId: app.app_apple_id,
+			})),
+			products: master.integrations.app_store.products ?? {},
+		},
+		googlePlay: {
+			enabled: master.integrations.google_play.enabled,
+			packages: master.integrations.google_play.packages ?? [],
+			clientEmail: master.integrations.google_play.client_email,
+			privateKey: master.integrations.google_play.private_key,
+			privateKeyPath: master.integrations.google_play.private_key_path,
+			serviceAccountJsonPath: master.integrations.google_play.service_account_json_path,
+			tokenUri: master.integrations.google_play.token_uri ?? 'https://oauth2.googleapis.com/token',
+			products: master.integrations.google_play.products ?? {},
+			pushAudience: master.integrations.google_play.push_audience,
+			pushServiceAccountEmail: master.integrations.google_play.push_service_account_email,
+		},
+		storeBilling: {
+			sandboxUserIds: master.integrations.store_billing.sandbox_user_ids ?? [],
+			sandboxEntitlesAll: master.integrations.store_billing.sandbox_entitles_all,
 		},
 		worker: {
 			mode: apiWorkerConfig?.mode ?? 'all_lanes',
 			laneName: apiWorkerConfig?.lane,
 			taskName: apiWorkerConfig?.task as WorkerTaskName | undefined,
 			enableCronScheduler: apiWorkerConfig?.enable_cron_scheduler,
-			enableVoiceReconciliation: apiWorkerConfig?.enable_voice_reconciliation ?? true,
 			laneConcurrencyOverrides: {
 				realtime: apiWorkerConfig?.lane_concurrency_overrides?.realtime,
 				unfurl: apiWorkerConfig?.lane_concurrency_overrides?.unfurl,
 				lifecycle: apiWorkerConfig?.lane_concurrency_overrides?.lifecycle,
 				batch: apiWorkerConfig?.lane_concurrency_overrides?.batch,
+				crosspost: apiWorkerConfig?.lane_concurrency_overrides?.crosspost,
 			},
 		},
+	};
+}
+
+interface APIServerOptions {
+	port: number;
+	headersTimeoutMs: number;
+	requestTimeoutMs: number;
+}
+
+export function buildAPIServerOptions(config: APIConfig): APIServerOptions {
+	return {
+		port: config.port,
+		headersTimeoutMs: config.headersTimeoutMs,
+		requestTimeoutMs: config.requestTimeoutMs,
 	};
 }
 

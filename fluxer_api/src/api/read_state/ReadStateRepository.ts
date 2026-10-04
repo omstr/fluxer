@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import type {ChannelID, MessageID, UserID} from '../BrandedTypes';
-import {channelIdToMessageId} from '../BrandedTypes';
-import {BatchBuilder, deleteOneOrMany, fetchMany, fetchOne, upsertOne} from '../database/CassandraQueryExecution';
-import {defineTable} from '../database/CassandraTableDsl';
-import {Db, type DbOp} from '../database/CassandraTypes';
-import type {ReadStateRow} from '../database/types/ChannelTypes';
-import {READ_STATE_COLUMNS} from '../database/types/ChannelTypes';
-import {ReadState} from '../models/ReadState';
-import type {IReadStateRepository} from './IReadStateRepository';
+import type {ChannelID, MessageID, UserID} from '@app/api/BrandedTypes';
+import {channelIdToMessageId} from '@app/api/BrandedTypes';
+import {
+	BatchBuilder,
+	fetchMany,
+	fetchManyInChunks,
+	fetchOne,
+	upsertOne,
+} from '@app/api/database/CassandraQueryExecution';
+import {defineTable} from '@app/api/database/CassandraTableDsl';
+import {Db, type DbOp} from '@app/api/database/CassandraTypes';
+import type {ReadStateRow} from '@app/api/database/types/ChannelTypes';
+import {READ_STATE_COLUMNS} from '@app/api/database/types/ChannelTypes';
+import {ReadState} from '@app/api/models/ReadState';
+import type {IReadStateRepository, ReadStateUpsert} from '@app/api/read_state/IReadStateRepository';
 
 const ReadStates = defineTable<ReadStateRow, 'user_id' | 'channel_id'>({
 	name: 'read_states',
@@ -22,12 +28,23 @@ const FETCH_READ_STATE_BY_USER_AND_CHANNEL_CQL = ReadStates.selectCql({
 	where: [ReadStates.where.eq('user_id'), ReadStates.where.eq('channel_id')],
 	limit: 1,
 });
+const FETCH_READ_STATES_BY_CHANNEL_IDS_CQL = ReadStates.selectCql({
+	where: [ReadStates.where.eq('user_id'), ReadStates.where.in('channel_id', 'channel_ids')],
+});
 const BULK_READ_STATE_BATCH_QUERY_LIMIT = 50;
 
 export class ReadStateRepository implements IReadStateRepository {
 	async listReadStates(userId: UserID): Promise<Array<ReadState>> {
 		const rows = await fetchMany<ReadStateRow>(FETCH_READ_STATES_CQL, {user_id: userId});
 		return rows.map((row) => new ReadState(row));
+	}
+
+	async getReadState(userId: UserID, channelId: ChannelID): Promise<ReadState | null> {
+		const row = await fetchOne<ReadStateRow>(FETCH_READ_STATE_BY_USER_AND_CHANNEL_CQL, {
+			user_id: userId,
+			channel_id: channelId,
+		});
+		return row ? new ReadState(row) : null;
 	}
 
 	async upsertReadState(
@@ -37,7 +54,7 @@ export class ReadStateRepository implements IReadStateRepository {
 		mentionCount = 0,
 		lastPinTimestamp?: Date,
 		manual = false,
-	): Promise<ReadState> {
+	): Promise<ReadStateUpsert> {
 		return this.upsertReadStateRow(userId, channelId, messageId, mentionCount, lastPinTimestamp, manual);
 	}
 
@@ -48,13 +65,14 @@ export class ReadStateRepository implements IReadStateRepository {
 		mentionCount = 0,
 		lastPinTimestamp?: Date,
 		manual = false,
-	): Promise<ReadState> {
+	): Promise<ReadStateUpsert> {
 		const currentReadState = await fetchOne<ReadStateRow>(FETCH_READ_STATE_BY_USER_AND_CHANNEL_CQL, {
 			user_id: userId,
 			channel_id: channelId,
 		});
-		if (!manual && currentReadState?.message_id != null && currentReadState.message_id > messageId) {
-			return new ReadState(currentReadState);
+		const previous = currentReadState ? new ReadState(currentReadState) : null;
+		if (!manual && previous?.lastMessageId != null && previous.lastMessageId > messageId) {
+			return {readState: previous, previous};
 		}
 		const patch: Record<string, DbOp<unknown>> = {
 			message_id: Db.set(messageId),
@@ -64,13 +82,14 @@ export class ReadStateRepository implements IReadStateRepository {
 			patch['last_pin_timestamp'] = Db.set(lastPinTimestamp);
 		}
 		await upsertOne(ReadStates.patchByPk({user_id: userId, channel_id: channelId}, patch));
-		return new ReadState({
+		const readState = new ReadState({
 			user_id: userId,
 			channel_id: channelId,
 			message_id: messageId,
 			mention_count: mentionCount,
 			last_pin_timestamp: lastPinTimestamp ?? currentReadState?.last_pin_timestamp ?? null,
 		});
+		return {readState, previous};
 	}
 
 	async incrementReadStateMentions(
@@ -97,7 +116,7 @@ export class ReadStateRepository implements IReadStateRepository {
 			if (baselineMessageId >= messageId) {
 				return null;
 			}
-			return this.upsertReadStateRow(userId, channelId, baselineMessageId, incrementBy);
+			return (await this.upsertReadStateRow(userId, channelId, baselineMessageId, incrementBy)).readState;
 		}
 		if (currentReadState.message_id != null && currentReadState.message_id >= messageId) {
 			return null;
@@ -189,15 +208,6 @@ export class ReadStateRepository implements IReadStateRepository {
 		return appliedUpdates;
 	}
 
-	async deleteReadState(userId: UserID, channelId: ChannelID): Promise<void> {
-		await deleteOneOrMany(
-			ReadStates.deleteByPk({
-				user_id: userId,
-				channel_id: channelId,
-			}),
-		);
-	}
-
 	async bulkAckMessages(
 		userId: UserID,
 		readStates: Array<{
@@ -215,18 +225,16 @@ export class ReadStateRepository implements IReadStateRepository {
 			messageId: MessageID;
 		}>,
 	): Promise<Array<ReadState>> {
-		const currentRows = await Promise.all(
-			readStates.map((readState) =>
-				fetchOne<ReadStateRow>(FETCH_READ_STATE_BY_USER_AND_CHANNEL_CQL, {
-					user_id: userId,
-					channel_id: readState.channelId,
-				}),
-			),
+		const currentRows = await fetchManyInChunks<ReadStateRow, ChannelID>(
+			FETCH_READ_STATES_BY_CHANNEL_IDS_CQL,
+			readStates.map((readState) => readState.channelId),
+			(chunk) => ({user_id: userId, channel_ids: chunk}),
 		);
+		const currentRowsByChannel = new Map(currentRows.map((row) => [row.channel_id, row]));
 		const batch = new BatchBuilder();
 		const results: Array<ReadState> = [];
-		for (const [index, readState] of readStates.entries()) {
-			const currentReadState = currentRows[index];
+		for (const readState of readStates) {
+			const currentReadState = currentRowsByChannel.get(readState.channelId);
 			if (currentReadState?.message_id != null && currentReadState.message_id > readState.messageId) {
 				results.push(new ReadState(currentReadState));
 				continue;

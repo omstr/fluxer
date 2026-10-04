@@ -117,6 +117,7 @@ const InviteLoginPageMFA = observer(function InviteLoginPageMFA() {
 	const handleMfaSuccess = useCallback(
 		async ({token, userId}: LoginSuccessPayload) => {
 			if (isHandoff) {
+				await AccountManager.refreshStoredAccount(userId, token);
 				await handoff.start({token, userId});
 				return;
 			}
@@ -170,7 +171,7 @@ const InviteLoginPageContainer = observer(() => {
 		}
 		const guild = guildInvite.guild;
 		if (guild?.splash && guild.id) {
-			const splashUrl = getGuildSplashURL({id: guild.id, splash: guild.splash}, 4096) ?? null;
+			const splashUrl = getGuildSplashURL({id: guild.id, splash: guild.splash}) ?? null;
 			setSplashUrl(splashUrl);
 		}
 	}, [guildInvite?.guild?.splash, guildInvite?.guild?.id, setSplashUrl]);

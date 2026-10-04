@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {
+	AccountLimitedBarrier,
 	BlockedUserBarrier,
 	SystemDmBarrier,
 	UnclaimedDMBarrier,
@@ -39,9 +40,10 @@ import Channels from '@app/features/channel/state/Channels';
 import * as ChannelUtils from '@app/features/channel/utils/ChannelUtils';
 import {INCOMING_CALL_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
 import {useMemberListVisible} from '@app/features/member/hooks/useMemberListVisible';
-import {ComponentDispatch} from '@app/features/platform/utils/ComponentBus';
+import {ComponentBus} from '@app/features/platform/utils/ComponentBus';
 import ReadStates from '@app/features/read_state/state/ReadStates';
 import Relationships from '@app/features/relationship/state/Relationships';
+import {remFromPx} from '@app/features/theme/layout/RemFromPx';
 import {Button} from '@app/features/ui/button/Button';
 import MobileLayout from '@app/features/ui/state/MobileLayout';
 import {isMobileExperienceEnabled} from '@app/features/ui/utils/MobileExperience';
@@ -77,6 +79,7 @@ export const DMChannelView = observer(({channelId}: DMChannelViewProps) => {
 	const recipient = recipientId ? Users.getUser(recipientId) : null;
 	const isRecipientBlocked = recipientId ? Relationships.isBlocked(recipientId) : false;
 	const isCurrentUserUnclaimed = !Users.currentUser?.isClaimed();
+	const isCurrentUserLimited = Users.currentUser?.accountLimited === true;
 	const isSystemDm = channel ? ChannelUtils.isSystemDmChannel(channel) : false;
 	const isDM = channel?.type === ChannelTypes.DM;
 	const isGroupDM = channel?.type === ChannelTypes.GROUP_DM;
@@ -99,7 +102,7 @@ export const DMChannelView = observer(({channelId}: DMChannelViewProps) => {
 		activeSearchQuery,
 		activeSearchSegments,
 	} = searchState;
-	const {hasMessagesBottomBar, onBottomBarVisibilityChange} = useMessagesBottomBarVisibility(channelId);
+	const {onBottomBarVisibilityChange} = useMessagesBottomBarVisibility(channelId);
 	const {enabled: isMobileLayout} = MobileLayout;
 	const isSearchPanelVisible = isSearchActive && !isMobileLayout;
 	useChannelSearchVisibility(channelId, isSearchPanelVisible);
@@ -159,7 +162,7 @@ export const DMChannelView = observer(({channelId}: DMChannelViewProps) => {
 	});
 	useEffect(() => {
 		if (!showCompactVoiceView || !currentChannelId) return;
-		return ComponentDispatch.subscribe('COMPACT_VOICE_CALL_EXPANSION_TOGGLE', (payload?: unknown) => {
+		return ComponentBus.subscribe('COMPACT_VOICE_CALL_EXPANSION_TOGGLE', (payload?: unknown) => {
 			const {channelId: targetChannelId} = (payload ?? {}) as {channelId?: string};
 			if (targetChannelId && targetChannelId !== currentChannelId) return false;
 			handleToggleCompactCallExpanded();
@@ -375,7 +378,11 @@ export const DMChannelView = observer(({channelId}: DMChannelViewProps) => {
 										variant="secondary"
 										onClick={handleOpenCallSheet}
 										leftIcon={
-											<PhoneIcon size={16} weight="fill" data-flx="channel.channel-view.dm-channel-view.phone-icon" />
+											<PhoneIcon
+												size={remFromPx(16)}
+												weight="fill"
+												data-flx="channel.channel-view.dm-channel-view.phone-icon"
+											/>
 										}
 										data-flx="channel.channel-view.dm-channel-view.button.open-call-sheet"
 									>
@@ -472,7 +479,6 @@ export const DMChannelView = observer(({channelId}: DMChannelViewProps) => {
 				}
 				chatArea={
 					<ChannelChatLayout
-						channel={channel}
 						messages={
 							<Messages
 								key={channel.id}
@@ -487,9 +493,11 @@ export const DMChannelView = observer(({channelId}: DMChannelViewProps) => {
 							) : isDM && isRecipientBlocked && recipient ? (
 								<BlockedUserBarrier
 									userId={recipient.id}
-									username={NicknameUtils.getNickname(recipient)}
+									username={NicknameUtils.getNickname(recipient, null)}
 									data-flx="channel.channel-view.dm-channel-view.blocked-user-barrier"
 								/>
+							) : isCurrentUserLimited && !isPersonalNotes ? (
+								<AccountLimitedBarrier data-flx="channel.channel-view.dm-channel-view.account-limited-barrier" />
 							) : isCurrentUserUnclaimed && isDM && !isPersonalNotes && !isGroupDM ? (
 								<UnclaimedDMBarrier data-flx="channel.channel-view.dm-channel-view.unclaimed-dm-barrier" />
 							) : (
@@ -500,7 +508,6 @@ export const DMChannelView = observer(({channelId}: DMChannelViewProps) => {
 								/>
 							)
 						}
-						hideBottomBar={hasMessagesBottomBar}
 						data-flx="channel.channel-view.dm-channel-view.channel-chat-layout"
 					/>
 				}

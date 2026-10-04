@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import RuntimeCrash from '@app/features/app/state/RuntimeCrash';
-import {CaptchaModal} from '@app/features/auth/components/modals/CaptchaModal';
 import {openClaimAccountModal} from '@app/features/auth/components/modals/ClaimAccountModal';
 import {useSudo} from '@app/features/auth/hooks/useSudo';
 import NewDeviceMonitoring from '@app/features/auth/state/NewDeviceMonitoring';
@@ -17,6 +16,7 @@ import GatewayConnection from '@app/features/gateway/transport/GatewayConnection
 import {TRY_AGAIN_IN_A_MOMENT_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
 import {KeyboardModeIntroModal} from '@app/features/input/components/modals/KeyboardModeIntroModal';
 import {Logger} from '@app/features/platform/utils/AppLogger';
+import {remFromPx} from '@app/features/theme/layout/RemFromPx';
 import * as TrustedDomainCommands from '@app/features/trusted_domain/commands/TrustedDomainCommands';
 import TrustedDomain from '@app/features/trusted_domain/state/TrustedDomain';
 import {MenuItem} from '@app/features/ui/action_menu/MenuItem';
@@ -120,23 +120,6 @@ export const ToolsMenu: React.FC<{onClose: () => void}> = observer(({onClose}) =
 	const [isResettingPremiumState, setIsResettingPremiumState] = useState(false);
 	const socket = GatewayConnection.socket;
 	const trustedDomainsCount = TrustedDomain.getTrustedDomainsCount();
-	const handleOpenCaptchaModal = useCallback(() => {
-		ModalCommands.pushAfterBottomSheetClose(
-			onClose,
-			ModalCommands.modal(() => (
-				<CaptchaModal
-					closeOnVerify={false}
-					onVerify={(token, captchaType) => {
-						logger.debug('Captcha solved from developer tools menu', {token, captchaType});
-					}}
-					onCancel={() => {
-						logger.debug('Captcha cancelled from developer tools menu');
-					}}
-					data-flx="channel.channel-header-components.developer-tools-context-menu.handle-open-captcha-modal.captcha-modal"
-				/>
-			)),
-		);
-	}, [onClose]);
 	const handleForgetAuthorizedIps = useCallback(async () => {
 		setIsForgettingAuthorizedIps(true);
 		try {
@@ -234,7 +217,7 @@ export const ToolsMenu: React.FC<{onClose: () => void}> = observer(({onClose}) =
 					<MenuItem
 						icon={
 							<PlugIcon
-								size={16}
+								size={remFromPx(16)}
 								weight="bold"
 								data-flx="channel.channel-header-components.developer-tools-context-menu.tools-menu.plug-icon"
 							/>
@@ -248,7 +231,7 @@ export const ToolsMenu: React.FC<{onClose: () => void}> = observer(({onClose}) =
 					<MenuItem
 						icon={
 							<PlugIcon
-								size={16}
+								size={remFromPx(16)}
 								weight="bold"
 								data-flx="channel.channel-header-components.developer-tools-context-menu.tools-menu.plug-icon--2"
 							/>
@@ -262,7 +245,7 @@ export const ToolsMenu: React.FC<{onClose: () => void}> = observer(({onClose}) =
 					<MenuItem
 						icon={
 							<PhoneIcon
-								size={16}
+								size={remFromPx(16)}
 								weight="fill"
 								data-flx="channel.channel-header-components.developer-tools-context-menu.tools-menu.phone-icon"
 							/>
@@ -281,15 +264,9 @@ export const ToolsMenu: React.FC<{onClose: () => void}> = observer(({onClose}) =
 						<Trans>Show new device modal</Trans>
 					</MenuItem>
 					<MenuItem
-						onClick={handleOpenCaptchaModal}
-						data-flx="channel.channel-header-components.developer-tools-context-menu.tools-menu.menu-item.open-captcha-modal"
-					>
-						<Trans>Open captcha modal</Trans>
-					</MenuItem>
-					<MenuItem
 						icon={
 							<KeyboardIcon
-								size={16}
+								size={remFromPx(16)}
 								weight="fill"
 								data-flx="channel.channel-header-components.developer-tools-context-menu.tools-menu.keyboard-icon"
 							/>
@@ -328,7 +305,7 @@ export const ToolsMenu: React.FC<{onClose: () => void}> = observer(({onClose}) =
 					<MenuItem
 						icon={
 							<RobotIcon
-								size={16}
+								size={remFromPx(16)}
 								weight="fill"
 								data-flx="channel.channel-header-components.developer-tools-context-menu.tools-menu.robot-icon"
 							/>

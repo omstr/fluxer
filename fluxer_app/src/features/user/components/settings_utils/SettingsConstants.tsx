@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {PREMIUM_PRODUCT_FULL_NAME} from '@app/features/app/config/I18nDisplayConstants';
-import RuntimeConfig from '@app/features/app/state/RuntimeConfig';
+import {shouldShowPremiumFeatures} from '@app/features/premium/utils/PremiumUtils';
 import {guessPlatform, isDesktop} from '@app/features/ui/utils/NativeUtils';
 import {
 	ADVANCED_SETTINGS_TAG_LABELS,
@@ -44,17 +44,12 @@ import {
 	ProhibitIcon,
 	RobotIcon,
 	ShieldIcon,
-	StickerIcon,
 	TranslateIcon,
 	UserIcon,
 	UserListIcon,
 } from '@phosphor-icons/react';
 import type React from 'react';
 
-const EXPRESSION_PACKS_DESCRIPTOR = msg({
-	message: 'Expression packs',
-	comment: 'User settings tab for purchased or owned emoji/sticker expression packs.',
-});
 const BLOCKED_USERS_DESCRIPTOR = msg({
 	message: 'Blocked users',
 	comment: 'User settings tab listing accounts the current user has blocked.',
@@ -268,12 +263,6 @@ const ALL_TABS_DESCRIPTORS: Array<SettingsTabDescriptor> = [
 		icon: GiftIcon,
 	},
 	{
-		type: 'expression_packs',
-		category: 'billing',
-		label: EXPRESSION_PACKS_DESCRIPTOR,
-		icon: StickerIcon,
-	},
-	{
 		type: 'appearance',
 		category: 'app_settings',
 		label: LOOK_AND_FEEL_DESCRIPTOR,
@@ -405,7 +394,7 @@ export const getSettingsTabs = (i18n: I18n): Array<SettingsTab> => {
 		...tab,
 		label: getUserSettingsTabLabel(i18n, tab.type),
 	}));
-	const isSelfHosted = RuntimeConfig.isSelfHosted();
+	const showPremium = shouldShowPremiumFeatures();
 	const showClaimedAccountUi = shouldShowClaimedAccountUi();
 	return allTabs.filter((tab) => {
 		if (!showClaimedAccountUi && (tab.type === 'my_profile' || tab.type === 'linked_accounts')) {
@@ -414,7 +403,7 @@ export const getSettingsTabs = (i18n: I18n): Array<SettingsTab> => {
 		if (ACCOUNT_NESTED_TAB_TYPES.some((tabType) => tabType === tab.type)) {
 			return false;
 		}
-		if (isSelfHosted && (tab.type === 'plutonium' || tab.type === 'gift_inventory')) {
+		if (!showPremium && (tab.type === 'plutonium' || tab.type === 'gift_inventory')) {
 			return false;
 		}
 		if (tab.type === 'desktop_settings' && !isDesktop()) {

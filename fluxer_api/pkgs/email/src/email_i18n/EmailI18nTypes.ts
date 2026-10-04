@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 export interface EmailTemplateVariables {
-	account_disabled_suspicious: {
+	account_deletion_cancelled: {
+		username: string;
+	};
+	account_deletion_scheduled_inactivity: {
 		username: string;
 		reason: string | null;
-		forgotUrl: string;
+		deletionDate: Date;
+	};
+	account_deletion_scheduled_requested: {
+		username: string;
+		reason: string | null;
+		deletionDate: Date;
 	};
 	account_scheduled_deletion: {
 		username: string;
@@ -76,6 +84,11 @@ export interface EmailTemplateVariables {
 		ipAddress: string;
 		location: string;
 	};
+	mfa_backup_codes_view: {
+		username: string;
+		code: string;
+		expiresAt: Date;
+	};
 	password_change_verification: {
 		username: string;
 		code: string;
@@ -98,7 +111,7 @@ export interface EmailTemplateVariables {
 	scheduled_deletion_notification: {
 		username: string;
 		deletionDate: Date;
-		reason: string;
+		reason: string | null;
 	};
 	self_deletion_scheduled: {
 		username: string;
@@ -106,6 +119,6 @@ export interface EmailTemplateVariables {
 	};
 	unban_notification: {
 		username: string;
-		reason: string;
+		reason: string | null;
 	};
 }

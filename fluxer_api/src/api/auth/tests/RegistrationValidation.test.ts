@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {
+	createAuthHarness,
+	createTestAccount,
+	createUniqueEmail,
+	createUniqueUsername,
+} from '@app/api/auth/tests/AuthTestUtils';
+import {applySharedListUpdate, resetSharedListsForTests} from '@app/api/infrastructure/activity/SharedLists';
+import type {ApiTestHarness} from '@app/api/test/ApiTestHarness';
+import {createBuilder, createBuilderWithoutAuth} from '@app/api/test/TestRequestBuilder';
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
-import type {ApiTestHarness} from '../../test/ApiTestHarness';
-import {createBuilder, createBuilderWithoutAuth} from '../../test/TestRequestBuilder';
-import {createAuthHarness, createTestAccount, createUniqueEmail, createUniqueUsername} from './AuthTestUtils';
 
 interface ValidationErrorResponse {
 	code: string;
@@ -45,18 +51,23 @@ describe('Registration validation', () => {
 		expect(emailError?.message).toBe("Format d'adresse e-mail invalide.");
 	});
 	it('rejects blocked registration email TLDs as invalid email', async () => {
-		await createBuilderWithoutAuth(harness)
-			.post('/auth/register')
-			.body({
-				email: 'holdermichael_6023@example.blocked',
-				username: createUniqueUsername(),
-				global_name: 'Test User',
-				password: 'a-strong-password',
-				date_of_birth: '2000-01-01',
-				consent: true,
-			})
-			.expect(400)
-			.execute();
+		applySharedListUpdate('email_tld_blocked', 'blocked\n');
+		try {
+			await createBuilderWithoutAuth(harness)
+				.post('/auth/register')
+				.body({
+					email: 'holdermichael_6023@example.blocked',
+					username: createUniqueUsername(),
+					global_name: 'Test User',
+					password: 'a-strong-password',
+					date_of_birth: '2000-01-01',
+					consent: true,
+				})
+				.expect(400)
+				.execute();
+		} finally {
+			resetSharedListsForTests();
+		}
 	});
 	it('rejects weak password', async () => {
 		const json = await createBuilderWithoutAuth<ValidationErrorResponse>(harness)
@@ -119,6 +130,56 @@ describe('Registration validation', () => {
 			})
 			.expect(400)
 			.execute();
+	});
+	it('rejects an impossible calendar date with INVALID_DATE_OF_BIRTH_FORMAT', async () => {
+		for (const dateOfBirth of ['2000-02-30', '2000-13-45']) {
+			const json = await createBuilderWithoutAuth<ValidationErrorResponse>(harness)
+				.post('/auth/register')
+				.body({
+					email: createUniqueEmail('impossible-dob'),
+					username: createUniqueUsername('impossible'),
+					global_name: 'Test User',
+					password: 'a-strong-password',
+					date_of_birth: dateOfBirth,
+					consent: true,
+				})
+				.expect(400, 'INVALID_FORM_BODY')
+				.execute();
+			const dateOfBirthError = json.errors?.find((e) => e.path === 'date_of_birth');
+			expect(dateOfBirthError?.code).toBe('INVALID_DATE_OF_BIRTH_FORMAT');
+		}
+	});
+	it('rejects a real calendar date below the minimum age with MUST_BE_MINIMUM_AGE', async () => {
+		const json = await createBuilderWithoutAuth<ValidationErrorResponse>(harness)
+			.post('/auth/register')
+			.body({
+				email: createUniqueEmail('underage'),
+				username: createUniqueUsername('underage'),
+				global_name: 'Test User',
+				password: 'a-strong-password',
+				date_of_birth: '2020-01-01',
+				consent: true,
+			})
+			.expect(400, 'INVALID_FORM_BODY')
+			.execute();
+		const dateOfBirthError = json.errors?.find((e) => e.path === 'date_of_birth');
+		expect(dateOfBirthError?.code).toBe('MUST_BE_MINIMUM_AGE');
+	});
+	it('accepts a real calendar date above the minimum age', async () => {
+		const reg = await createBuilderWithoutAuth<{
+			token: string;
+		}>(harness)
+			.post('/auth/register')
+			.body({
+				email: createUniqueEmail('valid-dob'),
+				username: createUniqueUsername('validdob'),
+				global_name: 'Test User',
+				password: 'a-strong-password',
+				date_of_birth: '2000-01-01',
+				consent: true,
+			})
+			.execute();
+		expect(reg.token).toBeTruthy();
 	});
 	it('allows emoji in global name', async () => {
 		const globalName = '🌻 Sunflower';

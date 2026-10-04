@@ -1,31 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import type {WorkerTaskName} from '../worker/WorkerLaneConfig';
+import type {WorkerTaskName} from '@app/api/worker/WorkerLaneConfig';
+import type {CachePurgeAdapterName, StoreProductSlotName} from '@fluxer/config/src/MasterConfig';
 
 export type APIWorkerMode = 'all_lanes' | 'single_lane' | 'single_task';
-export type APIWorkerLaneName = 'realtime' | 'unfurl' | 'lifecycle' | 'batch';
+export type APIWorkerLaneName = 'realtime' | 'unfurl' | 'lifecycle' | 'batch' | 'crosspost';
 export type PushProviderEnvironment = 'production' | 'development';
 
 export interface PushProviderAppConfig {
 	appId: string;
 	topic?: string;
 	environment?: PushProviderEnvironment;
-	projectId?: string;
+}
+
+export interface AppStoreAppConfig {
+	bundleId: string;
+	appAppleId: number;
+}
+
+export interface APICachePurgeConfig {
+	adapter: CachePurgeAdapterName;
+	http: {
+		endpoint: string;
+		token: string;
+		timeoutMs: number;
+	};
 }
 
 interface APIGeoipFilesystemConfig {
 	mode: 'filesystem';
 	maxmindDbPath?: string;
-	maxmindAsnDbPath?: string;
 }
 
 interface APIGeoipS3Config {
 	mode: 's3';
 	maxmindDbPath: string;
-	maxmindAsnDbPath?: string;
 	s3Bucket: string;
 	s3Key: string;
-	s3AsnKey?: string;
 }
 
 export type APIGeoipConfig = APIGeoipFilesystemConfig | APIGeoipS3Config;
@@ -33,6 +44,10 @@ export type APIGeoipConfig = APIGeoipFilesystemConfig | APIGeoipS3Config;
 export interface APIConfig {
 	nodeEnv: 'development' | 'production';
 	port: number;
+	headersTimeoutMs: number;
+	requestTimeoutMs: number;
+	maxInflightRequests: number;
+	ipBanExemptIps: Array<string>;
 	cassandra: {
 		hosts: string;
 		port: number;
@@ -52,30 +67,24 @@ export interface APIConfig {
 		sslCa: string;
 		maxConnections: number;
 		kvTable: string;
+		preparedStatements: boolean;
 	};
 	database: {
 		backend: 'cassandra' | 'postgres';
 	};
 	kv: {
-		provider: 'redis';
 		url: string;
 		mode: 'standalone' | 'cluster';
-		clusterNodes: Array<{
-			host: string;
-			port: number;
-		}>;
-		clusterNatMap: Record<
-			string,
-			{
-				host: string;
-				port: number;
-			}
-		>;
 	};
 	nats: {
 		coreUrl: string;
 		jetStreamUrl: string;
 		authToken: string;
+	};
+	storageChangeFeed: {
+		enabled: boolean;
+		stream: string;
+		skipBuckets: Array<string>;
 	};
 	search: {
 		engine: 'elasticsearch' | 'meilisearch';
@@ -96,6 +105,9 @@ export interface APIConfig {
 			tokenTtlSecs: number;
 			keepDirectCountries: Array<string>;
 		};
+		attachmentUrls: {
+			secretsBase64: Array<string>;
+		};
 	};
 	geoip: APIGeoipConfig;
 	proxy: {
@@ -106,6 +118,7 @@ export interface APIConfig {
 		apiPublic: string;
 		apiClient: string;
 		webApp: string;
+		webAppOrigins: Array<string>;
 		gateway: string;
 		media: string;
 		staticCdn: string;
@@ -115,23 +128,12 @@ export interface APIConfig {
 		gift: string;
 	};
 	internal: {
-		gateway: string;
 		gatewayRpcAuthToken: string;
+		donationProxyKey: string;
 	};
 	hosts: {
-		invite: string;
-		gift: string;
 		marketing: string;
 		unfurlIgnored: Array<string>;
-	};
-	embeds: {
-		oEmbedHtmlEnabled: boolean;
-		oEmbedHtmlAllowUntrustedOnSelfHosted: boolean;
-		oEmbedHtmlAllowedHosts: Array<string>;
-		cacheDefaultTtlSeconds: number;
-		cacheMaxTtlSeconds: number;
-		cacheMinTtlSeconds: number;
-		cacheRespectRemoteTtl: boolean;
 	};
 	s3: {
 		endpoint: string;
@@ -145,8 +147,6 @@ export interface APIConfig {
 			uploads: string;
 			reports: string;
 			harvests: string;
-			downloads: string;
-			static: string;
 		};
 	};
 	email: {
@@ -155,6 +155,8 @@ export interface APIConfig {
 		webhookSecret?: string;
 		fromEmail: string;
 		fromName: string;
+		replyToEmail: string;
+		appBaseUrl: string;
 		smtp?: {
 			host: string;
 			port: number;
@@ -163,41 +165,18 @@ export interface APIConfig {
 			secure: boolean;
 		};
 	};
-	sms: {
+	blocklistFeeds: {
 		enabled: boolean;
-		accountSid?: string;
-		authToken?: string;
-		verifyServiceSid?: string;
-		inboundChallengeNumber?: string;
-		inboundWebhookAuthToken?: string;
-		inboundWebhookPublicUrl?: string;
 	};
-	risk: {
+	breachedPasswordCheck: {
 		enabled: boolean;
-		ipinfoApiKey?: string;
-		accountPolicyDsl?: unknown;
-	};
-	captcha: {
-		enabled: boolean;
-		provider: 'hcaptcha' | 'turnstile' | 'none';
-		hcaptcha?: {
-			siteKey: string;
-			secretKey: string;
-		};
-		turnstile?: {
-			siteKey: string;
-			secretKey: string;
-		};
-	};
-	contentModeration: {
-		nsfwThreshold: number;
 	};
 	voice: {
 		enabled: boolean;
 		apiKey?: string;
 		apiSecret?: string;
-		webhookUrl?: string;
 		url?: string;
+		internalUrl?: string;
 		defaultRegion?: {
 			id: string;
 			name: string;
@@ -214,17 +193,29 @@ export interface APIConfig {
 			monthlyUsd?: string;
 			monthlyEur?: string;
 			monthlyBrl?: string;
+			monthlyDkk?: string;
 			monthlyInr?: string;
+			monthlyNok?: string;
 			monthlyPln?: string;
+			monthlySek?: string;
 			monthlyTry?: string;
 			yearlyUsd?: string;
 			yearlyEur?: string;
 			yearlyBrl?: string;
+			yearlyDkk?: string;
 			yearlyInr?: string;
+			yearlyNok?: string;
 			yearlyPln?: string;
+			yearlySek?: string;
 			yearlyTry?: string;
 			gift1MonthUsd?: string;
 			gift1MonthEur?: string;
+			gift1MonthSek?: string;
+			gift1YearSek?: string;
+			gift1MonthDkk?: string;
+			gift1YearDkk?: string;
+			gift1MonthNok?: string;
+			gift1YearNok?: string;
 			gift1MonthBrl?: string;
 			gift1MonthInr?: string;
 			gift1MonthPln?: string;
@@ -236,12 +227,9 @@ export interface APIConfig {
 			gift1YearPln?: string;
 			gift1YearTry?: string;
 		};
+		legacyPrices?: Record<string, Array<string> | undefined>;
 	};
-	bunny: {
-		purgeEnabled: boolean;
-		apiKey?: string;
-		pullZoneId?: number;
-	};
+	cachePurge: APICachePurgeConfig;
 	clamav: {
 		enabled: boolean;
 		host: string;
@@ -249,12 +237,12 @@ export interface APIConfig {
 		failOpen: boolean;
 	};
 	admin: {
-		basePath: string;
 		oauthClientSecret?: string;
 	};
 	auth: {
 		sudoModeSecret: string;
 		connectionInitiationSecret: string;
+		ssoAllowPrivateAddresses: boolean;
 		passkeys: {
 			rpName: string;
 			rpId: string;
@@ -266,10 +254,6 @@ export interface APIConfig {
 			email?: string;
 		};
 		bluesky: BlueskyOAuthConfig;
-	};
-	cookie: {
-		domain: string;
-		secure: boolean;
 	};
 	klipy: {
 		apiKey?: string;
@@ -290,26 +274,12 @@ export interface APIConfig {
 			wordmarkUrl?: string;
 			faviconUrl?: string;
 			themeColor?: string;
+			statusPageUrl?: string;
+			statusPageIncidentHistoryUrl?: string;
 		};
 		setup: {
 			configured: boolean;
 		};
-	};
-	abusePolicy: {
-		inboundPhoneCountryCodes: Array<string>;
-		phoneVerification: {
-			inboundRequiredPrefixes: Array<string>;
-		};
-		directContactSpam: {
-			enabled: boolean;
-			countryCodes: Array<string>;
-			distinctTargetThreshold: number;
-			targetWindowMs: number;
-			action: 'flag_spammer' | 'suppress_delivery';
-		};
-	};
-	domain: {
-		baseDomain: string;
 	};
 	discovery: {
 		enabled: boolean;
@@ -320,8 +290,10 @@ export interface APIConfig {
 		disableRateLimits: boolean;
 		testModeEnabled: boolean;
 		testHarnessToken?: string;
+		validateResponses: boolean;
 	};
 	presignedAttachmentUploadsEnabled: boolean;
+	presignedHarvestDownloadsEnabled: boolean;
 	attachmentDecayEnabled: boolean;
 	deletionGracePeriodHours: number;
 	inactivityDeletionThresholdDays?: number;
@@ -333,31 +305,45 @@ export interface APIConfig {
 			keyId?: string;
 			privateKey?: string;
 			privateKeyPath?: string;
-			defaultEnvironment: PushProviderEnvironment;
 			apps: Array<PushProviderAppConfig>;
 		};
-		fcm: {
-			enabled: boolean;
-			projectId?: string;
-			clientEmail?: string;
-			privateKey?: string;
-			privateKeyPath?: string;
-			serviceAccountJsonPath?: string;
-			tokenUri: string;
-			apps: Array<PushProviderAppConfig>;
-		};
+	};
+	appStore: {
+		enabled: boolean;
+		issuerId?: string;
+		keyId?: string;
+		privateKey?: string;
+		privateKeyPath?: string;
+		apps: Array<AppStoreAppConfig>;
+		products: Record<string, StoreProductSlotName>;
+	};
+	googlePlay: {
+		enabled: boolean;
+		packages: Array<string>;
+		clientEmail?: string;
+		privateKey?: string;
+		privateKeyPath?: string;
+		serviceAccountJsonPath?: string;
+		tokenUri: string;
+		products: Record<string, StoreProductSlotName>;
+		pushAudience?: string;
+		pushServiceAccountEmail?: string;
+	};
+	storeBilling: {
+		sandboxUserIds: Array<string>;
+		sandboxEntitlesAll: boolean;
 	};
 	worker: {
 		mode: APIWorkerMode;
 		laneName?: APIWorkerLaneName;
 		taskName?: WorkerTaskName;
 		enableCronScheduler?: boolean;
-		enableVoiceReconciliation: boolean;
 		laneConcurrencyOverrides: {
 			realtime?: number;
 			unfurl?: number;
 			lifecycle?: number;
 			batch?: number;
+			crosspost?: number;
 		};
 	};
 	ncmec: {

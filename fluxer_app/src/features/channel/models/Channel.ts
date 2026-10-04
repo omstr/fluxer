@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import RuntimeConfig from '@app/features/app/state/RuntimeConfig';
+import {noteText} from '@app/features/theme/fonts/ScriptFontLoader';
 import UserPinnedDM from '@app/features/user/state/UserPinnedDM';
 import Users from '@app/features/user/state/Users';
 import {ChannelTypes, GUILD_TEXT_BASED_CHANNEL_TYPES, Permissions} from '@fluxer/constants/src/ChannelConstants';
@@ -86,7 +87,8 @@ export class Channel {
 		this.instanceId = options?.instanceId ?? RuntimeConfig.localInstanceDomain;
 		this.id = channel.id;
 		this.guildId = channel.guild_id;
-		this.name = channel.name;
+		this.name = channel.name ?? undefined;
+		noteText(this.name);
 		this.topic = channel.topic ?? null;
 		this.url = channel.url ?? null;
 		this.icon = channel.icon ?? null;
@@ -158,6 +160,10 @@ export class Channel {
 		return this.type === ChannelTypes.GUILD_TEXT;
 	}
 
+	isGuildAnnouncement(): boolean {
+		return this.type === ChannelTypes.GUILD_ANNOUNCEMENT;
+	}
+
 	isGuildVoice(): boolean {
 		return this.type === ChannelTypes.GUILD_VOICE;
 	}
@@ -182,6 +188,7 @@ export class Channel {
 		if (
 			this.guildId == null ||
 			(this.type !== ChannelTypes.GUILD_TEXT &&
+				this.type !== ChannelTypes.GUILD_ANNOUNCEMENT &&
 				this.type !== ChannelTypes.GUILD_VOICE &&
 				this.type !== ChannelTypes.GUILD_LINK)
 		) {
@@ -221,7 +228,7 @@ export class Channel {
 			{
 				id: this.id,
 				guild_id: updates.guild_id ?? this.guildId,
-				name: updates.name ?? this.name,
+				name: updates.name !== undefined ? updates.name : this.name,
 				topic: updates.topic !== undefined ? updates.topic : this.topic,
 				url: updates.url !== undefined ? updates.url : this.url,
 				icon: updates.icon !== undefined ? updates.icon : this.icon,
@@ -301,7 +308,8 @@ export class Channel {
 		const otherOverwrites = Object.keys(other.permissionOverwrites);
 		if (thisOverwrites.length !== otherOverwrites.length) return false;
 		for (const key of thisOverwrites) {
-			if (!this.permissionOverwrites[key].equals(other.permissionOverwrites[key])) {
+			const otherOverwrite = other.permissionOverwrites[key];
+			if (otherOverwrite == null || !this.permissionOverwrites[key].equals(otherOverwrite)) {
 				return false;
 			}
 		}

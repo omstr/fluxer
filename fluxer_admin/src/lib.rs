@@ -3,8 +3,10 @@
 pub mod acl;
 pub mod activity;
 pub mod admin_flags;
+pub mod admin_hints;
 pub mod api;
 pub mod config;
+pub mod fonts;
 pub mod middleware;
 pub mod oauth2;
 pub mod routes;

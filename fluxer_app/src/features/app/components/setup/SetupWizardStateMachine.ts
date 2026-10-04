@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {assign, getInitialSnapshot, type SnapshotFrom, setup, transition} from 'xstate';
+import {assign, initialTransition, type SnapshotFrom, setup, transition} from 'xstate';
 
 export type WizardStep =
 	| 'welcome'
@@ -14,9 +14,9 @@ export type WizardStep =
 	| 'media_expiry'
 	| 'integration_gif'
 	| 'integration_youtube'
-	| 'integration_captcha'
 	| 'integration_email'
 	| 'integration_bluesky'
+	| 'push_relay_consent'
 	| 'services'
 	| 'premium'
 	| 'finish';
@@ -33,9 +33,9 @@ export const CONFIGURE_STEPS: ReadonlyArray<WizardStep> = [
 	'media_expiry',
 	'integration_gif',
 	'integration_youtube',
-	'integration_captcha',
 	'integration_email',
 	'integration_bluesky',
+	'push_relay_consent',
 	'services',
 	'premium',
 	'finish',
@@ -157,7 +157,7 @@ export const setupWizardStateMachine = setup({
 export type SetupWizardSnapshot = SnapshotFrom<typeof setupWizardStateMachine>;
 
 export function createSetupWizardSnapshot(): SetupWizardSnapshot {
-	return getInitialSnapshot(setupWizardStateMachine);
+	return initialTransition(setupWizardStateMachine)[0];
 }
 
 export function transitionSetupWizardSnapshot(

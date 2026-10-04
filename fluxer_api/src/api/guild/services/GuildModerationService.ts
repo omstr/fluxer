@@ -1,5 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {GuildID, UserID} from '@app/api/BrandedTypes';
+import {isIpBanExempt} from '@app/api/ban/IpBanExemptions';
+import type {GuildAuditLogService} from '@app/api/guild/GuildAuditLogService';
+import type {GuildAuditLogChange} from '@app/api/guild/GuildAuditLogTypes';
+import {mapGuildBansToResponse} from '@app/api/guild/GuildModel';
+import type {IGuildRepositoryAggregate} from '@app/api/guild/repositories/IGuildRepositoryAggregate';
+import {createGuildMfaEnforcer} from '@app/api/guild/services/GuildMfaEnforcement';
+import {GuildMemberSearchIndexService} from '@app/api/guild/services/member/GuildMemberSearchIndexService';
+import type {IGatewayService} from '@app/api/infrastructure/IGatewayService';
+import type {UserCacheService} from '@app/api/infrastructure/UserCacheService';
+import {Logger} from '@app/api/Logger';
+import type {RequestCache} from '@app/api/middleware/RequestCacheMiddleware';
+import type {GuildBan} from '@app/api/models/GuildBan';
+import type {IUserRepository} from '@app/api/user/IUserRepository';
+import type {WorkerTaskName} from '@app/api/worker/WorkerLaneConfig';
 import {AuditLogActionType} from '@fluxer/constants/src/AuditLogActionType';
 import {Permissions} from '@fluxer/constants/src/ChannelConstants';
 import {ValidationErrorCodes} from '@fluxer/constants/src/ValidationErrorCodes';
@@ -11,22 +26,9 @@ import {UnknownGuildMemberError} from '@fluxer/errors/src/domains/guild/UnknownG
 import {UnknownUserError} from '@fluxer/errors/src/domains/user/UnknownUserError';
 import {isSameIpDecisionMatch} from '@fluxer/ip_utils/src/IpAddress';
 import type {GuildBanResponse} from '@fluxer/schema/src/domains/guild/GuildMemberSchemas';
-import type {IpInfoService} from '@pkgs/geoip/src/IpInfoService';
 import type {IWorkerService} from '@pkgs/worker/src/contracts/IWorkerService';
-import type {GuildID, UserID} from '../../BrandedTypes';
-import type {IGatewayService} from '../../infrastructure/IGatewayService';
-import type {UserCacheService} from '../../infrastructure/UserCacheService';
-import {Logger} from '../../Logger';
-import type {RequestCache} from '../../middleware/RequestCacheMiddleware';
-import type {GuildBan} from '../../models/GuildBan';
-import {hasHighCgnatBlastRadiusRisk, isSingleIpBanCandidate} from '../../risk/IpBanCgnatGuard';
-import type {IUserRepository} from '../../user/IUserRepository';
-import type {WorkerTaskName} from '../../worker/WorkerLaneConfig';
-import type {GuildAuditLogService} from '../GuildAuditLogService';
-import type {GuildAuditLogChange} from '../GuildAuditLogTypes';
-import {mapGuildBansToResponse} from '../GuildModel';
-import type {IGuildRepositoryAggregate} from '../repositories/IGuildRepositoryAggregate';
-import {GuildMemberSearchIndexService} from './member/GuildMemberSearchIndexService';
+
+const SECONDS_PER_DAY = 86_400;
 
 export class GuildModerationService {
 	private readonly searchIndexService: GuildMemberSearchIndexService;
@@ -38,9 +40,21 @@ export class GuildModerationService {
 		private readonly userCacheService: UserCacheService,
 		private readonly workerService: IWorkerService<WorkerTaskName>,
 		private readonly guildAuditLogService: GuildAuditLogService,
-		private readonly ipInfoService: IpInfoService,
 	) {
 		this.searchIndexService = new GuildMemberSearchIndexService();
+	}
+
+	private async checkModerationPermission(params: {
+		guildId: GuildID;
+		userId: UserID;
+		permission: bigint;
+	}): Promise<void> {
+		const {guildId, userId, permission} = params;
+		const hasPermission = await this.gatewayService.checkPermission({guildId, userId, permission});
+		if (!hasPermission) throw new MissingPermissionsError();
+		const guildData = await this.gatewayService.getGuildData({guildId, userId});
+		const enforceGuildMfa = await createGuildMfaEnforcer({userRepository: this.userRepository, guildData, userId});
+		enforceGuildMfa(permission);
 	}
 
 	async banMember(
@@ -49,19 +63,24 @@ export class GuildModerationService {
 			targetId: UserID;
 			guildId: GuildID;
 			deleteMessageDays?: number;
+			deleteMessageSeconds?: number;
 			reason?: string | null;
 			banDurationSeconds?: number;
 			skipGuildAuditLog?: boolean;
 		},
 		auditLogReason?: string | null,
 	): Promise<void> {
-		const {userId, guildId, targetId, deleteMessageDays, reason, banDurationSeconds, skipGuildAuditLog} = params;
-		const hasPermission = await this.gatewayService.checkPermission({
-			guildId,
+		const {
 			userId,
-			permission: Permissions.BAN_MEMBERS,
-		});
-		if (!hasPermission) throw new MissingPermissionsError();
+			guildId,
+			targetId,
+			deleteMessageDays,
+			deleteMessageSeconds,
+			reason,
+			banDurationSeconds,
+			skipGuildAuditLog,
+		} = params;
+		await this.checkModerationPermission({guildId, userId, permission: Permissions.BAN_MEMBERS});
 		if (userId === targetId) throw new UnknownGuildMemberError();
 		const targetUser = await this.userRepository.findUnique(targetId);
 		if (!targetUser) {
@@ -72,14 +91,16 @@ export class GuildModerationService {
 			const canManage = await this.gatewayService.checkTargetMember({guildId, userId, targetUserId: targetId});
 			if (!canManage) throw new MissingPermissionsError();
 		}
-		if (deleteMessageDays && deleteMessageDays > 0) {
+		const effectiveDeleteMessageSeconds =
+			deleteMessageSeconds ?? (deleteMessageDays !== undefined ? deleteMessageDays * SECONDS_PER_DAY : undefined);
+		if (effectiveDeleteMessageSeconds && effectiveDeleteMessageSeconds > 0) {
 			await this.workerService.addJob('deleteUserMessagesInGuildByTime', {
 				guildId: guildId.toString(),
 				userId: targetId.toString(),
-				days: deleteMessageDays,
+				seconds: effectiveDeleteMessageSeconds,
 			});
 		}
-		const targetIp = targetUser.lastActiveIp || null;
+		const targetIp = isIpBanExempt(targetUser.lastActiveIp) ? null : targetUser.lastActiveIp || null;
 		const targetEmail = targetUser.email?.toLowerCase() || null;
 		let expiresAt: Date | null = null;
 		if (banDurationSeconds && banDurationSeconds > 0) {
@@ -97,13 +118,15 @@ export class GuildModerationService {
 		});
 		if (!skipGuildAuditLog) {
 			const metadata: Record<string, string> | undefined =
-				deleteMessageDays !== undefined ? {delete_member_days: deleteMessageDays.toString()} : undefined;
+				effectiveDeleteMessageSeconds && effectiveDeleteMessageSeconds > 0
+					? {delete_message_seconds: String(effectiveDeleteMessageSeconds)}
+					: undefined;
 			await this.recordAuditLog({
 				guildId,
 				userId,
 				action: AuditLogActionType.MEMBER_BAN_ADD,
 				targetId: targetId,
-				auditLogReason: auditLogReason ?? null,
+				auditLogReason: auditLogReason ?? (reason || null),
 				metadata,
 				changes: this.guildAuditLogService.computeChanges(null, this.serializeBanForAudit(ban)),
 			});
@@ -144,12 +167,7 @@ export class GuildModerationService {
 		requestCache: RequestCache;
 	}): Promise<Array<GuildBanResponse>> {
 		const {userId, guildId, requestCache} = params;
-		const hasPermission = await this.gatewayService.checkPermission({
-			guildId,
-			userId,
-			permission: Permissions.BAN_MEMBERS,
-		});
-		if (!hasPermission) throw new MissingPermissionsError();
+		await this.checkModerationPermission({guildId, userId, permission: Permissions.BAN_MEMBERS});
 		const bans = await this.guildRepository.listBans(guildId);
 		return await mapGuildBansToResponse(bans, this.userCacheService, requestCache);
 	}
@@ -163,12 +181,7 @@ export class GuildModerationService {
 		auditLogReason?: string | null,
 	): Promise<void> {
 		const {userId, guildId, targetId} = params;
-		const hasPermission = await this.gatewayService.checkPermission({
-			guildId,
-			userId,
-			permission: Permissions.BAN_MEMBERS,
-		});
-		if (!hasPermission) throw new MissingPermissionsError();
+		await this.checkModerationPermission({guildId, userId, permission: Permissions.BAN_MEMBERS});
 		const ban = await this.guildRepository.getBan(guildId, targetId);
 		if (!ban) {
 			throw InputValidationError.fromCode('user_id', ValidationErrorCodes.USER_IS_NOT_BANNED);
@@ -202,38 +215,13 @@ export class GuildModerationService {
 		const userEmail = user?.email?.toLowerCase();
 		for (const ban of bans) {
 			if (ban.userId === userId) throw new BannedFromGuildError();
-			if (isSameIpDecisionMatch(userIp, ban.ipAddress) && (await this.shouldEnforceIpBan(userIp, ban.ipAddress))) {
+			if (isSameIpDecisionMatch(userIp, ban.ipAddress) && !isIpBanExempt(userIp)) {
 				throw new IpBannedFromGuildError();
 			}
 		}
 		if (userEmail) {
 			const emailBan = await this.guildRepository.getBanByEmail(guildId, userEmail);
 			if (emailBan) throw new BannedFromGuildError();
-		}
-	}
-
-	private async shouldEnforceIpBan(
-		userIp: string | null | undefined,
-		bannedIp: string | null | undefined,
-	): Promise<boolean> {
-		if (!userIp || !bannedIp || !isSingleIpBanCandidate(bannedIp)) {
-			return true;
-		}
-		try {
-			const highRisk = await hasHighCgnatBlastRadiusRisk(userIp, this.ipInfoService, {
-				source: 'guild.ip_ban',
-				reason: 'join_cgnat_guard',
-			});
-			if (highRisk) {
-				Logger.warn(
-					{userIp, bannedIp},
-					'Skipping guild IP ban match because IPInfo indicates high CGNAT blast-radius risk',
-				);
-			}
-			return !highRisk;
-		} catch (error) {
-			Logger.warn({error, userIp, bannedIp}, 'IPInfo CGNAT guard failed while checking guild IP ban');
-			return true;
 		}
 	}
 

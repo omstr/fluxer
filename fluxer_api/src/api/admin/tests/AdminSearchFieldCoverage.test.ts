@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {createTestAccount, setUserACLs} from '@app/api/auth/tests/AuthTestUtils';
+import {createGuild} from '@app/api/channel/tests/ChannelTestUtils';
+import {getUserActivityBuffer} from '@app/api/middleware/ServiceSingletons';
+import {type ApiTestHarness, createApiTestHarness} from '@app/api/test/ApiTestHarness';
+import {HTTP_STATUS} from '@app/api/test/TestConstants';
+import {createBuilder} from '@app/api/test/TestRequestBuilder';
 import type {GuildAdminResponse} from '@fluxer/schema/src/domains/admin/AdminGuildSchemas';
 import type {UserAdminResponse} from '@fluxer/schema/src/domains/admin/AdminUserSchemas';
 import {afterEach, beforeEach, describe, expect, test} from 'vitest';
-import {createTestAccount, setUserACLs} from '../../auth/tests/AuthTestUtils';
-import {createGuild} from '../../channel/tests/ChannelTestUtils';
-import {type ApiTestHarness, createApiTestHarness} from '../../test/ApiTestHarness';
-import {HTTP_STATUS} from '../../test/TestConstants';
-import {createBuilder, createBuilderWithoutAuth} from '../../test/TestRequestBuilder';
 
 interface UserSearchResponse {
 	users: Array<UserAdminResponse>;
@@ -19,27 +20,13 @@ interface GuildSearchResponse {
 	total: number;
 }
 
-async function setContactInfo(
-	harness: ApiTestHarness,
-	userId: string,
-	data: {
-		has_verified_phone?: boolean;
-		email?: string | null;
-	},
-): Promise<void> {
-	await createBuilderWithoutAuth(harness)
-		.post(`/test/users/${userId}/set-contact-info`)
-		.body(data)
-		.expect(HTTP_STATUS.OK)
-		.execute();
-}
-
 async function setLastActiveIp(harness: ApiTestHarness, token: string, ip: string): Promise<void> {
 	await createBuilder(harness, `${token}`)
 		.get('/users/@me')
 		.header('x-forwarded-for', ip)
 		.expect(HTTP_STATUS.OK)
 		.execute();
+	await getUserActivityBuffer().drainAndFlush();
 }
 
 describe('Admin Search Field Coverage', () => {
@@ -58,8 +45,7 @@ describe('Admin Search Field Coverage', () => {
 			const targetUser = await createTestAccount(harness, {email: uniqueEmail});
 			await createTestAccount(harness, {email: `other-user-${Date.now()}@different.example`});
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: uniqueEmail, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(uniqueEmail)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -75,8 +61,7 @@ describe('Admin Search Field Coverage', () => {
 			const userA = await createTestAccount(harness, {email: emailA});
 			const userB = await createTestAccount(harness, {email: emailB});
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: emailA, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(emailA)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const foundA = result.users.find((u) => u.id === userA.userId);
@@ -90,8 +75,7 @@ describe('Admin Search Field Coverage', () => {
 			const domain = `partialdomain${Date.now()}.example`;
 			const user = await createTestAccount(harness, {email: `user@${domain}`});
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: domain, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(domain)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -107,8 +91,7 @@ describe('Admin Search Field Coverage', () => {
 			const targetUser = await createTestAccount(harness, {username: uniqueUsername});
 			await createTestAccount(harness, {username: `yother_${Date.now()}`});
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: uniqueUsername, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(uniqueUsername)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -125,8 +108,7 @@ describe('Admin Search Field Coverage', () => {
 			const userA = await createTestAccount(harness, {username: usernameA});
 			const userB = await createTestAccount(harness, {username: usernameB});
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: usernameA, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(usernameA)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const foundA = result.users.find((u) => u.id === userA.userId);
@@ -142,8 +124,7 @@ describe('Admin Search Field Coverage', () => {
 			const targetUser = await createTestAccount(harness);
 			await createTestAccount(harness);
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: targetUser.userId, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(targetUser.userId)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -156,8 +137,7 @@ describe('Admin Search Field Coverage', () => {
 			await setUserACLs(harness, admin, ['admin:authenticate', 'user:lookup']);
 			const targetUser = await createTestAccount(harness);
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: targetUser.userId, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(targetUser.userId)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -169,8 +149,7 @@ describe('Admin Search Field Coverage', () => {
 			await setUserACLs(harness, admin, ['admin:authenticate', 'user:lookup']);
 			const targetUser = await createTestAccount(harness);
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: targetUser.userId, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(targetUser.userId)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const matchingUsers = result.users.filter((u) => u.id === targetUser.userId);
@@ -188,8 +167,7 @@ describe('Admin Search Field Coverage', () => {
 			await setLastActiveIp(harness, targetUser.token, matchingIp);
 			await setLastActiveIp(harness, otherUser.token, nonMatchingIp);
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({last_active_ip: matchingIp, limit: 10, offset: 0})
+				.get(`/admin/users?last_active_ip=${encodeURIComponent(matchingIp)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -204,10 +182,8 @@ describe('Admin Search Field Coverage', () => {
 			const email = `fields-check-${Date.now()}@fieldtest.example`;
 			const username = `fieldcheck_${Date.now()}`;
 			const targetUser = await createTestAccount(harness, {email, username});
-			await setContactInfo(harness, targetUser.userId, {has_verified_phone: true});
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: email, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(email)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const found = result.users.find((u) => u.id === targetUser.userId);
@@ -215,7 +191,6 @@ describe('Admin Search Field Coverage', () => {
 			expect(found!.id).toBe(targetUser.userId);
 			expect(found!.username).toBe(username);
 			expect(found!.email).toBe(email);
-			expect(found!.has_verified_phone).toBe(true);
 			expect(found!).toHaveProperty('discriminator');
 			expect(found!).toHaveProperty('global_name');
 			expect(found!).toHaveProperty('flags');
@@ -223,7 +198,6 @@ describe('Admin Search Field Coverage', () => {
 			expect(found!).toHaveProperty('email_bounced');
 			expect(found!).toHaveProperty('premium_type');
 			expect(found!).toHaveProperty('acls');
-			expect(found!).toHaveProperty('suspicious_activity_flags');
 		});
 	});
 	describe('user search isolation across fields', () => {
@@ -238,22 +212,19 @@ describe('Admin Search Field Coverage', () => {
 			const userA = await createTestAccount(harness, {email: emailA, username: usernameA});
 			const userB = await createTestAccount(harness, {email: emailB, username: usernameB});
 			const searchByEmailA = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: emailA, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(emailA)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(searchByEmailA.users.find((u) => u.id === userA.userId)).toBeDefined();
 			expect(searchByEmailA.users.find((u) => u.id === userB.userId)).toBeUndefined();
 			const searchByUsernameB = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: usernameB, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(usernameB)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(searchByUsernameB.users.find((u) => u.id === userB.userId)).toBeDefined();
 			expect(searchByUsernameB.users.find((u) => u.id === userA.userId)).toBeUndefined();
 			const searchByIdB = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: userB.userId, limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent(userB.userId)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(searchByIdB.users.find((u) => u.id === userB.userId)).toBeDefined();
@@ -270,8 +241,7 @@ describe('Admin Search Field Coverage', () => {
 			const guildA = await createGuild(harness, admin.token, nameA);
 			const guildB = await createGuild(harness, admin.token, nameB);
 			const result = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: nameA, limit: 10, offset: 0})
+				.get(`/admin/guilds?q=${encodeURIComponent(nameA)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -290,8 +260,7 @@ describe('Admin Search Field Coverage', () => {
 			const guildA = await createGuild(harness, admin.token, uniqueNameA);
 			const guildB = await createGuild(harness, admin.token, uniqueNameB);
 			const result = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: uniqueNameA, limit: 10, offset: 0})
+				.get(`/admin/guilds?q=${encodeURIComponent(uniqueNameA)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const foundA = result.guilds.find((g) => g.id === guildA.id);
@@ -307,8 +276,7 @@ describe('Admin Search Field Coverage', () => {
 			const guildA = await createGuild(harness, admin.token, `ID Search A ${Date.now()}`);
 			const guildB = await createGuild(harness, admin.token, `ID Search B ${Date.now()}`);
 			const result = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: guildA.id, limit: 10, offset: 0})
+				.get(`/admin/guilds?q=${encodeURIComponent(guildA.id)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -323,8 +291,7 @@ describe('Admin Search Field Coverage', () => {
 			await setUserACLs(harness, admin, ['admin:authenticate', 'guild:lookup']);
 			const guild = await createGuild(harness, admin.token, `Offset Guild ${Date.now()}`);
 			const result = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: guild.id, limit: 10, offset: 1})
+				.get(`/admin/guilds?q=${encodeURIComponent(guild.id)}&limit=10&offset=1`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.guilds).toEqual([]);
@@ -338,8 +305,7 @@ describe('Admin Search Field Coverage', () => {
 			const guildName = `Field Check Guild ${Date.now()}`;
 			const guild = await createGuild(harness, admin.token, guildName);
 			const result = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: guildName, limit: 10, offset: 0})
+				.get(`/admin/guilds?q=${encodeURIComponent(guildName)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const found = result.guilds.find((g) => g.id === guild.id);
@@ -361,16 +327,14 @@ describe('Admin Search Field Coverage', () => {
 			const guildByAdmin = await createGuild(harness, admin.token, `Admin Owned ${ts}`);
 			const guildByOther = await createGuild(harness, otherOwner.token, `Other Owned ${ts}`);
 			const resultAdmin = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: `Admin Owned ${ts}`, limit: 10, offset: 0})
+				.get(`/admin/guilds?q=${encodeURIComponent(`Admin Owned ${ts}`)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const foundAdmin = resultAdmin.guilds.find((g) => g.id === guildByAdmin.id);
 			expect(foundAdmin).toBeDefined();
 			expect(foundAdmin!.owner_id).toBe(admin.userId);
 			const resultOther = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: `Other Owned ${ts}`, limit: 10, offset: 0})
+				.get(`/admin/guilds?q=${encodeURIComponent(`Other Owned ${ts}`)}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			const foundOther = resultOther.guilds.find((g) => g.id === guildByOther.id);
@@ -384,8 +348,7 @@ describe('Admin Search Field Coverage', () => {
 			await setUserACLs(harness, admin, ['admin:authenticate', 'user:lookup']);
 			await createTestAccount(harness);
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({limit: 10, offset: 0})
+				.get(`/admin/users?limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -396,8 +359,7 @@ describe('Admin Search Field Coverage', () => {
 			await setUserACLs(harness, admin, ['admin:authenticate', 'guild:lookup']);
 			await createGuild(harness, admin.token, `Omitted Query Guild ${Date.now()}`);
 			const result = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({limit: 10, offset: 0})
+				.get('/admin/guilds?limit=10&offset=0')
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.total).toBeGreaterThanOrEqual(1);
@@ -407,8 +369,7 @@ describe('Admin Search Field Coverage', () => {
 			const admin = await createTestAccount(harness);
 			await setUserACLs(harness, admin, ['admin:authenticate', 'user:lookup']);
 			const result = await createBuilder<UserSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/users/search')
-				.body({query: 'zzz-impossible-match-query-xyzzy-99999', limit: 10, offset: 0})
+				.get(`/admin/users?q=${encodeURIComponent('zzz-impossible-match-query-xyzzy-99999')}&limit=10&offset=0`)
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.users).toEqual([]);
@@ -418,8 +379,7 @@ describe('Admin Search Field Coverage', () => {
 			const admin = await createTestAccount(harness);
 			await setUserACLs(harness, admin, ['admin:authenticate', 'guild:lookup']);
 			const result = await createBuilder<GuildSearchResponse>(harness, `${admin.token}`)
-				.post('/admin/guilds/search')
-				.body({query: 'zzz-impossible-match-query-xyzzy-99999', limit: 10, offset: 0})
+				.get('/admin/guilds?q=zzz-impossible-match-query-xyzzy-99999&limit=10&offset=0')
 				.expect(HTTP_STATUS.OK)
 				.execute();
 			expect(result.guilds).toEqual([]);

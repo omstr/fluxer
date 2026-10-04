@@ -87,7 +87,8 @@ pub fn public_url_env(public_url: &str) -> Result<Vec<(String, String)>> {
         ("FLUXER_ADMIN_ENDPOINT".to_owned(), format!("{base}/admin")),
         (
             "FLUXER_MARKETING_ENDPOINT".to_owned(),
-            format!("{base}/marketing"),
+            std::env::var("FLUXER_MARKETING_ENDPOINT")
+                .unwrap_or_else(|_| "https://fluxer.app".to_owned()),
         ),
         (
             "FLUXER_MEDIA_PROXY_PUBLIC_ENDPOINT".to_owned(),
@@ -96,10 +97,6 @@ pub fn public_url_env(public_url: &str) -> Result<Vec<(String, String)>> {
         (
             "FLUXER_LIVEKIT_URL".to_owned(),
             format!("{gateway_base}/livekit"),
-        ),
-        (
-            "FLUXER_LIVEKIT_WEBHOOK_URL".to_owned(),
-            format!("{base}/api/webhooks/livekit"),
         ),
         (
             "FLUXER_MEDIA_PROXY_UPLOAD_RELAY_ENDPOINT".to_owned(),
@@ -226,7 +223,7 @@ pub fn resolve_cloudflare_public_url(public_url_arg: Option<&str>) -> Result<Str
         }
     }
     bail!(
-        "Missing Cloudflare tunnel public URL. Run `pnpm dev:tunnel:configure -- --public-url https://...` or pass `pnpm dev -- --cloudflare-tunnel --public-url https://...`."
+        "Missing Cloudflare tunnel public URL. Run `pnpm dev:tunnel:configure --public-url https://...` or pass `pnpm dev --cloudflare-tunnel --public-url https://...`."
     );
 }
 
@@ -252,6 +249,16 @@ pub async fn run_cloudflare_tunnel(
         return Ok(status.code().unwrap_or(1));
     }
     if running_inside_devcontainer() {
+        let container = std::fs::read_to_string("/etc/hostname")
+            .context("failed to read the current devcontainer hostname")?;
+        let container = container.trim();
+        if container.is_empty()
+            || !container
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+        {
+            bail!("Current devcontainer hostname is invalid");
+        }
         let docker = docker_command();
         let mut command = Command::new(&docker[0]);
         command.args(&docker[1..]);
@@ -260,11 +267,7 @@ pub async fn run_cloudflare_tunnel(
                 "run",
                 "--rm",
                 "--network",
-                &format!(
-                    "container:{}",
-                    std::env::var("HOSTNAME")
-                        .unwrap_or_else(|_| "fluxer-dev-workspace-1".to_owned())
-                ),
+                &format!("container:{container}"),
                 "cloudflare/cloudflared:latest",
                 "tunnel",
                 "run",

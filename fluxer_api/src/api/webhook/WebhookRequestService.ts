@@ -1,7 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {ChannelID, GuildID, MessageID, UserID, WebhookID, WebhookToken} from '@app/api/BrandedTypes';
+import {createUserID} from '@app/api/BrandedTypes';
+import {Config} from '@app/api/Config';
+import type {IChannelRepository} from '@app/api/channel/IChannelRepository';
+import type {MessageUpdateRequest} from '@app/api/channel/MessageTypes';
+import {createMessageResponseDataService} from '@app/api/channel/services/message/MessageResponseDataService';
+import type {IGatewayService} from '@app/api/infrastructure/IGatewayService';
+import type {LiveKitWebhookService} from '@app/api/infrastructure/LiveKitWebhookService';
+import type {UserCacheService} from '@app/api/infrastructure/UserCacheService';
+import type {RequestCache} from '@app/api/middleware/RequestCacheMiddleware';
+import type {Message} from '@app/api/models/Message';
+import type {SweegoWebhookService} from '@app/api/webhook/SweegoWebhookService';
+import {transformSlackWebhookRequest} from '@app/api/webhook/transformers/SlackTransformer';
+import {
+	createWebhookSourceResolver,
+	mapWebhooksToResponse,
+	mapWebhookToResponseWithCache,
+	mapWebhookToTokenResponse,
+	type WebhookSourceResolver,
+} from '@app/api/webhook/WebhookModel';
+import type {WebhookExecuteMessageData, WebhookService} from '@app/api/webhook/WebhookService';
 import type {MessageResponse} from '@fluxer/schema/src/domains/message/MessageResponseSchemas';
 import type {GitHubWebhook} from '@fluxer/schema/src/domains/webhook/GitHubWebhookSchemas';
+import type {InstatusWebhook} from '@fluxer/schema/src/domains/webhook/InstatusWebhookSchemas';
 import type {
 	SlackWebhookRequest,
 	WebhookCreateRequest,
@@ -9,20 +31,6 @@ import type {
 	WebhookUpdateRequest,
 } from '@fluxer/schema/src/domains/webhook/WebhookRequestSchemas';
 import type {WebhookResponse, WebhookTokenResponse} from '@fluxer/schema/src/domains/webhook/WebhookSchemas';
-import type {ChannelID, GuildID, MessageID, UserID, WebhookID, WebhookToken} from '../BrandedTypes';
-import {createUserID} from '../BrandedTypes';
-import {Config} from '../Config';
-import type {IChannelRepository} from '../channel/IChannelRepository';
-import type {MessageUpdateRequest} from '../channel/MessageTypes';
-import {createMessageResponseDataService} from '../channel/services/message/MessageResponseDataService';
-import type {LiveKitWebhookService} from '../infrastructure/LiveKitWebhookService';
-import type {UserCacheService} from '../infrastructure/UserCacheService';
-import type {RequestCache} from '../middleware/RequestCacheMiddleware';
-import type {Message} from '../models/Message';
-import type {SweegoWebhookService} from './SweegoWebhookService';
-import {transformSlackWebhookRequest} from './transformers/SlackTransformer';
-import {mapWebhooksToResponse, mapWebhookToResponseWithCache, mapWebhookToTokenResponse} from './WebhookModel';
-import type {WebhookExecuteMessageData, WebhookService} from './WebhookService';
 
 type WebhookExecutionResponse = MessageResponse | null;
 
@@ -136,6 +144,13 @@ interface WebhookExecuteSlackParams {
 	requestCache: RequestCache;
 }
 
+interface WebhookExecuteInstatusParams {
+	webhookId: WebhookID;
+	token: WebhookToken;
+	data: InstatusWebhook;
+	requestCache: RequestCache;
+}
+
 interface LiveKitWebhookParams {
 	body: string;
 	authHeader?: string;
@@ -155,7 +170,16 @@ export class WebhookRequestService {
 		private readonly userCacheService: UserCacheService,
 		private readonly liveKitWebhookService: LiveKitWebhookService | null,
 		private readonly sweegoWebhookService: SweegoWebhookService,
+		private readonly gatewayService: IGatewayService,
 	) {}
+
+	private sourceResolver(requestCache: RequestCache): WebhookSourceResolver {
+		return createWebhookSourceResolver({
+			channelRepository: this.channelRepository,
+			gatewayService: this.gatewayService,
+			requestCache,
+		});
+	}
 
 	async listGuildWebhooks(params: WebhookListGuildParams): Promise<Array<WebhookResponse>> {
 		const webhooks = await this.webhookService.getGuildWebhooks({
@@ -166,6 +190,7 @@ export class WebhookRequestService {
 			webhooks,
 			userCacheService: this.userCacheService,
 			requestCache: params.requestCache,
+			resolveSource: this.sourceResolver(params.requestCache),
 		});
 	}
 
@@ -178,6 +203,7 @@ export class WebhookRequestService {
 			webhooks,
 			userCacheService: this.userCacheService,
 			requestCache: params.requestCache,
+			resolveSource: this.sourceResolver(params.requestCache),
 		});
 	}
 
@@ -209,6 +235,7 @@ export class WebhookRequestService {
 			webhook,
 			userCacheService: this.userCacheService,
 			requestCache: params.requestCache,
+			resolveSource: this.sourceResolver(params.requestCache),
 		});
 	}
 
@@ -235,6 +262,7 @@ export class WebhookRequestService {
 			webhook,
 			userCacheService: this.userCacheService,
 			requestCache: params.requestCache,
+			resolveSource: this.sourceResolver(params.requestCache),
 		});
 	}
 
@@ -300,6 +328,15 @@ export class WebhookRequestService {
 			token: params.token,
 			event: params.event,
 			delivery: params.delivery,
+			data: params.data,
+			requestCache: params.requestCache,
+		});
+	}
+
+	async executeInstatusWebhook(params: WebhookExecuteInstatusParams): Promise<void> {
+		await this.webhookService.executeInstatusWebhook({
+			webhookId: params.webhookId,
+			token: params.token,
 			data: params.data,
 			requestCache: params.requestCache,
 		});

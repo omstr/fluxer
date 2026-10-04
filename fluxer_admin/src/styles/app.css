@@ -5,7 +5,7 @@
 
 @theme {
   --font-sans: "Fluxer Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fluxer Sans", ui-sans-serif, system-ui, sans-serif;
   --color-brand-primary: hsl(242 70% 55%);
   --color-brand-primary-dark: hsl(242 70% 47%);
   --color-brand-primary-rgb: 93 79 192;
@@ -13,7 +13,6 @@
 
 :root {
   --brand-primary: hsl(242 70% 55%);
-  --font-bricolage: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
   --focus-ring-color: hsl(242 70% 55% / 0.45);
   --focus-ring-offset: #ffffff;
 }
@@ -238,4 +237,29 @@ input:disabled + .checkbox-custom {
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: content-box;
+}
+
+:target {
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  scroll-margin-top: 6rem;
+  animation: target-pulse 700ms ease-in-out 3;
+}
+
+@keyframes target-pulse {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+
+  50% {
+    background-color: hsl(242 70% 55% / 0.18);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :target {
+    background-color: hsl(242 70% 55% / 0.12);
+    animation: none;
+  }
 }

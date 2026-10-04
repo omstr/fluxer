@@ -2,8 +2,14 @@
 
 use anyhow::Context;
 use fluxer_app_proxy::{
-    config::AppProxyConfig, discovery_cache::DiscoveryCache, geoip,
-    invite_meta::InviteMetaResolver, routes::build_router, state::AppState,
+    config::AppProxyConfig,
+    csp::CompiledCspPolicy,
+    discovery_cache::DiscoveryCache,
+    geoip,
+    routes::{build_router, present_local_asset_prefixes},
+    state::{
+        AppProxyBudgets, AppState, MAX_SPA_INDEX_BYTES, build_http_client, read_bounded_text_file,
+    },
 };
 use std::sync::Arc;
 use tokio::{net::TcpListener, runtime::Builder};
@@ -11,14 +17,17 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with(fluxer_common::config::env_filter("info"))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config = AppProxyConfig::from_env();
+    let config = Arc::new(AppProxyConfig::from_env());
     let addr = format!("{}:{}", config.host, config.port);
+
+    let csp = Arc::new(
+        CompiledCspPolicy::from_config(&config)
+            .context("failed to compile the Fluxer app proxy content security policy")?,
+    );
 
     let geoip = Arc::new(geoip::resolver_from_app_config(&config));
 
@@ -28,12 +37,8 @@ fn main() -> anyhow::Result<()> {
         .context("failed to create Fluxer app proxy async runtime")?;
 
     runtime.block_on(async move {
-        let http_client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::limited(2))
-            .build()
-            .context("failed to build Fluxer app proxy HTTP client")?;
+        let http_client =
+            build_http_client().context("failed to build Fluxer app proxy HTTP client")?;
         let discovery_cache = Arc::new(DiscoveryCache::new());
 
         if let Err(err) = discovery_cache
@@ -49,21 +54,9 @@ fn main() -> anyhow::Result<()> {
             config.discovery_refresh_interval_ms,
         );
 
-        let invite_meta = if config.invite_meta_enabled {
-            match InviteMetaResolver::connect(&config).await {
-                Ok(resolver) => Some(Arc::new(resolver)),
-                Err(err) => {
-                    tracing::warn!(%err, "invite metadata resolver disabled; failed to connect to database");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let index_html = if config.index_upstream_url.is_none() {
             let index_path = std::path::Path::new(&config.static_dir).join("index.html");
-            match tokio::fs::read_to_string(&index_path).await {
+            match read_bounded_text_file(&index_path, MAX_SPA_INDEX_BYTES).await {
                 Ok(contents) => Some(Arc::<str>::from(contents)),
                 Err(err) => {
                     tracing::warn!(path = ?index_path, %err, "failed to preload index.html; will read per request");
@@ -74,13 +67,20 @@ fn main() -> anyhow::Result<()> {
             None
         };
 
+        let local_asset_prefixes = config
+            .index_upstream_url
+            .is_none()
+            .then(|| present_local_asset_prefixes(&config.static_dir));
+
         let state = AppState {
-            config: Arc::new(config),
+            config,
+            csp,
             http_client,
             discovery_cache,
             geoip,
-            invite_meta,
             index_html,
+            local_asset_prefixes,
+            budgets: AppProxyBudgets::default(),
         };
 
         let router = build_router(state);

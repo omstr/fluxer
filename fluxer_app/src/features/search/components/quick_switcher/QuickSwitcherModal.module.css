@@ -14,16 +14,8 @@
 	color: var(--qs-text-primary, var(--text-primary));
 }
 
-.option:hover {
-	background-color: var(--qs-row-hover, var(--background-modifier-accent));
-}
-
 .optionActive {
 	background-color: var(--qs-row-hover, var(--background-modifier-accent));
-}
-
-:global(html.theme-light) .option:hover {
-	background-color: var(--qs-row-hover-light, var(--background-modifier-hover));
 }
 
 :global(html.theme-light) .optionActive {
@@ -123,21 +115,23 @@
 }
 
 .optionIcon {
+	box-sizing: content-box;
 	width: 1.25rem;
 	height: 1.25rem;
+	padding: 0.125rem;
 	flex-shrink: 0;
 	color: var(--qs-icon-colour, var(--text-secondary));
 }
 
 .avatar {
-	width: 1.25rem;
-	height: 1.25rem;
+	width: 1.5rem;
+	height: 1.5rem;
 	flex-shrink: 0;
 }
 
 .guildIcon {
-	height: 1.25rem;
-	width: 1.25rem;
+	height: 1.5rem;
+	width: 1.5rem;
 	border-radius: 624.9375rem;
 	flex-shrink: 0;
 }
@@ -339,7 +333,7 @@
 	flex-direction: column;
 	height: 100%;
 	background-color: var(--background-secondary);
-	padding: 0 1rem calc(env(safe-area-inset-bottom, 0) + 1rem);
+	padding: 0 1rem calc(env(safe-area-inset-bottom, 0px) + 1rem);
 }
 
 .mobileSearchContainer {

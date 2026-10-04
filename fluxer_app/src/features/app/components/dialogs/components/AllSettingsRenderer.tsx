@@ -7,20 +7,20 @@ import {
 	createRangesForSection,
 	setHighlightRanges,
 } from '@app/features/messaging/utils/CSSHighlightSearch';
+import {remFromPx} from '@app/features/theme/layout/RemFromPx';
 import {AccessibilityInlineContent} from '@app/features/user/components/modals/tabs/accessibility_tab/AccessibilityTabInline';
 import {AccountSecurityInlineTab} from '@app/features/user/components/modals/tabs/account_security_tab/AccountSecurityTabInline';
 import {AppearanceInlineContent} from '@app/features/user/components/modals/tabs/appearance_tab/AppearanceTabInline';
 import ApplicationsTab from '@app/features/user/components/modals/tabs/applications_tab';
 import {ChatSettingsInlineContent} from '@app/features/user/components/modals/tabs/chat_settings_tab/ChatSettingsTabInline';
 import DesktopSettingsTab from '@app/features/user/components/modals/tabs/DesktopSettingsTab';
-import ExpressionPacksTab from '@app/features/user/components/modals/tabs/ExpressionPacksTab';
 import GiftInventoryTab from '@app/features/user/components/modals/tabs/GiftInventoryTab';
 import KeybindsTab from '@app/features/user/components/modals/tabs/KeybindsTab';
 import LanguageTab from '@app/features/user/components/modals/tabs/LanguageTab';
 import LinkedAccountsTab from '@app/features/user/components/modals/tabs/LinkedAccountsTab';
 import MyProfileTab from '@app/features/user/components/modals/tabs/MyProfileTab';
 import {NotificationsInlineContent} from '@app/features/user/components/modals/tabs/notifications_tab/NotificationsTabInline';
-import PlutoniumTab from '@app/features/user/components/modals/tabs/PlutoniumTab';
+import {PlutoniumInlineTab} from '@app/features/user/components/modals/tabs/PlutoniumTab';
 import {PrivacyDashboardContent} from '@app/features/user/components/modals/tabs/privacy_safety_tab/PrivacySafetyTabInline';
 import {VoiceVideoInlineContent} from '@app/features/user/components/modals/tabs/voice_video_tab/VoiceVideoTabInline';
 import {getSettingsTabComponent} from '@app/features/user/components/settings_utils/DesktopSettingsTabs';
@@ -62,9 +62,8 @@ interface SettingsSectionProps {
 const INLINE_TAB_COMPONENTS: Partial<Record<UserSettingsTabType, React.ComponentType<Record<string, unknown>>>> = {
 	my_profile: MyProfileTab,
 	account_security: AccountSecurityInlineTab,
-	plutonium: PlutoniumTab,
+	plutonium: PlutoniumInlineTab,
 	gift_inventory: GiftInventoryTab,
-	expression_packs: ExpressionPacksTab,
 	privacy_safety: PrivacyDashboardContent,
 	authorized_apps: AccountSecurityInlineTab,
 	blocked_users: AccountSecurityInlineTab,
@@ -149,7 +148,7 @@ const SettingsSection: React.FC<SettingsSectionProps> = observer(
 							/>
 						</span>
 						<CaretRightIcon
-							size={16}
+							size={remFromPx(16)}
 							weight="bold"
 							className={clsx(styles.expandIcon, isExpanded && styles.expandIconExpanded)}
 							data-flx="app.all-settings-renderer.settings-section.expand-icon"
@@ -266,7 +265,8 @@ export const AllSettingsRenderer: React.FC<AllSettingsRendererProps> = observer(
 			>
 				<div className={styles.resultsHeader} data-flx="app.all-settings-renderer.results-header">
 					<Trans>
-						Found {resultCount} results in {categoryCount} categories
+						Found <Plural value={resultCount} one="# result" other="# results" /> in{' '}
+						<Plural value={categoryCount} one="# category" other="# categories" />
 					</Trans>
 				</div>
 				{searchResults.map((result) => (

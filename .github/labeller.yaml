@@ -22,15 +22,15 @@ f:docs:
 f:gateway:
   - changed-files:
     - any-glob-to-any-file: fluxer_gateway/**/*
-f:marketing:
-  - changed-files:
-    - any-glob-to-any-file: fluxer_marketing/**/*
 f:media_proxy:
   - changed-files:
     - any-glob-to-any-file: fluxer_media_proxy/**/*
 f:messages:
   - changed-files:
     - any-glob-to-any-file: fluxer_messages/**/*
+f:push:
+  - changed-files:
+    - any-glob-to-any-file: fluxer_push/**/*
 f:snowflakes:
   - changed-files:
     - any-glob-to-any-file: fluxer_snowflakes/**/*
@@ -58,6 +58,9 @@ p:date-utils:
 p:errors:
   - changed-files:
     - any-glob-to-any-file: packages/errors/**/*
+p:fonts:
+  - changed-files:
+    - any-glob-to-any-file: packages/fonts/**/*
 p:geo-utils:
   - changed-files:
     - any-glob-to-any-file: packages/geo_utils/**/*

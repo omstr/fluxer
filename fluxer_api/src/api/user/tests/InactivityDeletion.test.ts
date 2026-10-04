@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {createTestAccount, loginAccount} from '@app/api/auth/tests/AuthTestUtils';
+import {createUserID} from '@app/api/BrandedTypes';
+import {type ApiTestHarness, createApiTestHarness} from '@app/api/test/ApiTestHarness';
+import type {MockKVProvider} from '@app/api/test/mocks/MockKVProvider';
+import {HTTP_STATUS} from '@app/api/test/TestConstants';
+import {createBuilder, createBuilderWithoutAuth} from '@app/api/test/TestRequestBuilder';
+import {UserRepository} from '@app/api/user/repositories/UserRepository';
+import {expectDataExists} from '@app/api/user/tests/UserTestUtils';
 import {DeletionReasons} from '@fluxer/constants/src/Core';
 import {afterEach, beforeEach, describe, expect, test} from 'vitest';
-import {createTestAccount} from '../../auth/tests/AuthTestUtils';
-import {createUserID} from '../../BrandedTypes';
-import {type ApiTestHarness, createApiTestHarness} from '../../test/ApiTestHarness';
-import {createBuilderWithoutAuth} from '../../test/TestRequestBuilder';
-import {UserRepository} from '../repositories/UserRepository';
-import {expectDataExists} from './UserTestUtils';
 
 interface InactivityCheckResult {
 	warnings_sent: number;
@@ -106,6 +108,25 @@ describe('Inactivity Deletion', () => {
 		const user = await new UserRepository().findUniqueAssert(createUserID(BigInt(account.userId)));
 		expect(user.deletionReasonCode).toBe(DeletionReasons.INACTIVITY);
 	});
+	test('scheduling an inactivity deletion signs the account out and signing in again cancels it', async () => {
+		const account = await createTestAccount(harness);
+		const threeYearsAgo = new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000);
+		await setUserActivity(harness, account.userId, threeYearsAgo);
+		await harness.kvProvider.setex(
+			`inactivity_warning_sent:${account.userId}`,
+			35 * 24 * 60 * 60,
+			String(Date.now() - 31 * 24 * 60 * 60 * 1000),
+		);
+		const result = await processInactivityDeletions(harness);
+		expect(result.deletions_scheduled).toBe(1);
+		await createBuilder(harness, account.token).get('/users/@me').expect(HTTP_STATUS.UNAUTHORIZED).execute();
+		const login = await loginAccount(harness, account);
+		await createBuilder(harness, login.token).get('/users/@me').expect(HTTP_STATUS.OK).execute();
+		const dataStatus = await expectDataExists(harness, account.userId);
+		expect(dataStatus.hasSelfDeletedFlag).toBe(false);
+		expect(dataStatus.pendingDeletionAt).toBeNull();
+		expect(await harness.kvProvider.zcard('deletion_queue')).toBe(0);
+	});
 	test('warning email should be idempotent', async () => {
 		const account = await createTestAccount(harness);
 		const threeYearsAgo = new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000);
@@ -152,6 +173,30 @@ describe('Inactivity Deletion', () => {
 		const data2 = await expectDataExists(harness, account2.userId);
 		expect(data1.hasSelfDeletedFlag).toBe(false);
 		expect(data2.hasSelfDeletedFlag).toBe(false);
+	});
+	test('a page issues one batched activity lookup instead of per-user reads', async () => {
+		const kvProvider = harness.kvProvider as MockKVProvider;
+		const accounts = [
+			await createTestAccount(harness),
+			await createTestAccount(harness),
+			await createTestAccount(harness),
+		];
+		const threeYearsAgo = new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000);
+		for (const account of accounts) {
+			await setUserActivity(harness, account.userId, threeYearsAgo);
+		}
+		kvProvider.mgetSpy.mockClear();
+		kvProvider.getSpy.mockClear();
+		await processInactivityDeletions(harness);
+		const activityBatches = kvProvider.mgetSpy.mock.calls.filter((keys) =>
+			keys.some((key) => String(key).startsWith('user_activity:')),
+		);
+		expect(activityBatches).toHaveLength(1);
+		for (const account of accounts) {
+			expect(activityBatches[0]).toContain(`user_activity:${account.userId}`);
+		}
+		const activityGets = kvProvider.getSpy.mock.calls.filter((call) => String(call[0]).startsWith('user_activity:'));
+		expect(activityGets).toHaveLength(0);
 	});
 	test('should return processing statistics', async () => {
 		const result = await processInactivityDeletions(harness);

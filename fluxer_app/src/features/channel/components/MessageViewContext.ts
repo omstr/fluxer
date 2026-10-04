@@ -19,6 +19,7 @@ export interface MessagePreviewPermissions {
 	canDeleteAttachment: boolean;
 	canPinMessage: boolean;
 	canForwardMessage: boolean;
+	canCrosspostMessage: boolean;
 	canSuppressEmbeds: boolean;
 	shouldRenderSuppressEmbeds: boolean;
 }
@@ -34,7 +35,7 @@ export interface MessageViewContextValue {
 	previewPermissions?: MessagePreviewPermissions;
 	handleDelete: (bypassConfirm?: boolean) => void;
 	onPopoutToggle?: (isOpen: boolean) => void;
-	readonlyPreview?: boolean;
+	suppressMessageActions?: boolean;
 	onHeadingActivate?: () => void;
 }
 

@@ -16,7 +16,7 @@ import {
 	type VoiceGatewayVoiceStates,
 } from '@app/features/voice/engine/VoiceGatewayStateMachine';
 import {ME} from '@fluxer/constants/src/AppConstants';
-import {makeObservable, observable} from 'mobx';
+import {makeObservable, observable, observableRef} from 'mobx';
 
 const logger = new Logger('VoiceEngineV2AppVoiceStateAdapter');
 
@@ -45,15 +45,18 @@ export class VoiceEngineV2AppVoiceStateAdapter extends Store {
 	private voiceStates: VoiceGatewayVoiceStates = {};
 	private userVoiceStates: VoiceGatewayUserVoiceStates = {};
 	private connectionVoiceStates: VoiceGatewayConnectionVoiceStates = {};
+	private readonly guildVoiceStates = observable.map<string, VoiceGatewayVoiceStates[string]>(undefined, {
+		deep: false,
+	});
 	private readonly ignoredConnectionIds = new Set<string>();
 
 	constructor() {
 		super();
 		makeObservable<this, 'snapshot' | 'voiceStates' | 'userVoiceStates' | 'connectionVoiceStates'>(this, {
-			snapshot: observable.ref,
-			voiceStates: observable.ref,
-			userVoiceStates: observable.ref,
-			connectionVoiceStates: observable.ref,
+			snapshot: observableRef,
+			voiceStates: observableRef,
+			userVoiceStates: observableRef,
+			connectionVoiceStates: observableRef,
 		});
 		this.applyVoiceGatewayStateContext(this.snapshot.context);
 	}
@@ -92,7 +95,7 @@ export class VoiceEngineV2AppVoiceStateAdapter extends Store {
 		return connectionId != null && this.ignoredConnectionIds.has(connectionId);
 	}
 
-	handleConnectionOpen(guilds: Array<GuildReadyData>): void {
+	handleGatewayReady(guilds: Array<GuildReadyData>): void {
 		this.send({
 			type: 'connection.open',
 			guilds: guilds.map((guild) => filterIgnoredGuildVoiceStates(this.ignoredConnectionIds, guild)),
@@ -171,13 +174,13 @@ export class VoiceEngineV2AppVoiceStateAdapter extends Store {
 	}
 
 	getAllVoiceStatesInChannel(guildId: string, channelId: string): Readonly<Record<string, NormalizedVoiceState>> {
-		return this.voiceStates[guildId]?.[channelId] ?? {};
+		return this.guildVoiceStates.get(guildId)?.[channelId] ?? {};
 	}
 
 	getAllVoiceStatesInGuild(
 		guildId: string,
 	): Readonly<Record<string, Readonly<Record<string, NormalizedVoiceState>>>> | undefined {
-		return this.voiceStates[guildId];
+		return this.guildVoiceStates.get(guildId);
 	}
 
 	getAllVoiceStates(): Readonly<
@@ -201,6 +204,20 @@ export class VoiceEngineV2AppVoiceStateAdapter extends Store {
 		this.voiceStates = context.voiceStates;
 		this.userVoiceStates = context.userVoiceStates;
 		this.connectionVoiceStates = context.connectionVoiceStates;
+		this.synchronizeGuildVoiceStates(context.voiceStates);
+	}
+
+	private synchronizeGuildVoiceStates(voiceStates: VoiceGatewayVoiceStates): void {
+		for (const guildId of Array.from(this.guildVoiceStates.keys())) {
+			if (!Object.hasOwn(voiceStates, guildId)) {
+				this.guildVoiceStates.delete(guildId);
+			}
+		}
+		for (const guildId in voiceStates) {
+			const guildStates = voiceStates[guildId];
+			if (this.guildVoiceStates.get(guildId) === guildStates) continue;
+			this.guildVoiceStates.set(guildId, guildStates);
+		}
 	}
 }
 

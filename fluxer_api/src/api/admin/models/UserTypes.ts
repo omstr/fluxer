@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import dns from 'node:dns';
-import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
+import type {IGatewayService} from '@app/api/infrastructure/IGatewayService';
+import {Logger} from '@app/api/Logger';
+import type {User} from '@app/api/models/User';
+import {getIpAddressReverse, lookupGeoip} from '@app/api/utils/IpUtils';
+import {AdminACLs, filterKnownAdminACLs} from '@fluxer/constants/src/AdminACLs';
 import {BadGatewayError} from '@fluxer/errors/src/domains/core/BadGatewayError';
 import {GatewayTimeoutError} from '@fluxer/errors/src/domains/core/GatewayTimeoutError';
 import {ServiceUnavailableError} from '@fluxer/errors/src/domains/core/ServiceUnavailableError';
@@ -9,34 +12,6 @@ import type {UserAdminResponse} from '@fluxer/schema/src/domains/admin/AdminUser
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import type {ICacheService} from '@pkgs/cache/src/ICacheService';
 import {formatGeoipLocation} from '@pkgs/geoip/src/GeoipLookup';
-import {seconds} from 'itty-time';
-import type {IGatewayService} from '../../infrastructure/IGatewayService';
-import {Logger} from '../../Logger';
-import type {User} from '../../models/User';
-import {lookupGeoip} from '../../utils/IpUtils';
-
-const REVERSE_DNS_CACHE_TTL_SECONDS = seconds('1 day');
-
-async function reverseDnsLookup(ip: string, cacheService?: ICacheService): Promise<string | null> {
-	const cacheKey = `reverse-dns:${ip}`;
-	if (cacheService) {
-		const cached = await cacheService.get<string | null>(cacheKey);
-		if (cached !== null) {
-			return cached === '' ? null : cached;
-		}
-	}
-	let result: string | null = null;
-	try {
-		const hostnames = await dns.promises.reverse(ip);
-		result = hostnames[0] ?? null;
-	} catch {
-		result = null;
-	}
-	if (cacheService) {
-		await cacheService.set(cacheKey, result ?? '', REVERSE_DNS_CACHE_TTL_SECONDS);
-	}
-	return result;
-}
 
 function hasAcl(acls: ReadonlySet<string>, acl: string): boolean {
 	return acls.has(acl) || acls.has(AdminACLs.WILDCARD);
@@ -75,8 +50,9 @@ export async function mapUserToAdminResponse(
 	const canViewEmail = !acls || hasAcl(acls, AdminACLs.USER_VIEW_EMAIL);
 	const canViewDob = !acls || hasAcl(acls, AdminACLs.USER_VIEW_DOB);
 	const canViewIp = !acls || hasAcl(acls, AdminACLs.USER_VIEW_IP);
+	const canViewAuditLog = !acls || hasAcl(acls, AdminACLs.AUDIT_LOG_VIEW);
 	const lastActiveIpReverse =
-		canViewIp && user.lastActiveIp ? await reverseDnsLookup(user.lastActiveIp, cacheService) : null;
+		canViewIp && user.lastActiveIp ? await getIpAddressReverse(user.lastActiveIp, cacheService) : null;
 	let lastActiveLocation: string | null = null;
 	if (canViewIp && user.lastActiveIp) {
 		try {
@@ -106,7 +82,6 @@ export async function mapUserToAdminResponse(
 		email: canViewEmail ? (user.email ?? null) : null,
 		email_verified: canViewEmail ? user.emailVerified : false,
 		email_bounced: canViewEmail ? user.emailBounced : false,
-		has_verified_phone: user.hasVerifiedPhone,
 		date_of_birth: canViewDob ? user.dateOfBirth : null,
 		locale: user.locale,
 		premium_type: user.premiumType,
@@ -114,13 +89,16 @@ export async function mapUserToAdminResponse(
 		premium_until: user.premiumUntil?.toISOString() ?? null,
 		premium_grace_ends_at: user.premiumGraceEndsAt?.toISOString() ?? null,
 		premium_lifetime_sequence: user.premiumLifetimeSequence ?? null,
-		suspicious_activity_flags: user.suspiciousActivityFlags,
-		temp_banned_until: user.tempBannedUntil?.toISOString() ?? null,
+		temp_banned_until:
+			user.tempBannedUntil && user.tempBannedUntil.getTime() > Date.now() ? user.tempBannedUntil.toISOString() : null,
 		pending_deletion_at: user.pendingDeletionAt?.toISOString() ?? null,
 		pending_bulk_message_deletion_at: user.pendingBulkMessageDeletionAt?.toISOString() ?? null,
 		deletion_reason_code: user.deletionReasonCode,
 		deletion_public_reason: user.deletionPublicReason,
-		acls: user.acls ? Array.from(user.acls) : [],
+		deletion_audit_log_reason: canViewAuditLog ? user.deletionAuditLogReason : null,
+		deletion_scheduled_by: user.deletionScheduledBy?.toString() ?? null,
+		deletion_scheduled_at: user.deletionScheduledAt?.toISOString() ?? null,
+		acls: user.acls ? filterKnownAdminACLs(user.acls) : [],
 		traits: Array.from(user.traits).sort(),
 		has_totp: user.totpSecret !== null,
 		authenticator_types: user.authenticatorTypes ? Array.from(user.authenticatorTypes) : [],

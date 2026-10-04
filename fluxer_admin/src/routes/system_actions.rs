@@ -6,18 +6,20 @@ use crate::{
         types::{
             AppBrandingConfigUpdateRequest, AppLegalConfigUpdateRequest,
             AppPublicConfigUpdateRequest, AppRegistrationConfigUpdateRequest,
-            AppSetupConfigUpdateRequest, CreateRegistrationUrlRequest,
-            GatewayRolloutConfigUpdateRequest, GatewayRolloutMode,
-            InstanceAttachmentDecayUpdateRequest, InstanceBlueskyIntegrationUpdateRequest,
-            InstanceBlueskyKeyIntegrationUpdateRequest, InstanceCaptchaIntegrationUpdateRequest,
+            AppSetupConfigUpdateRequest, CAPTCHA_COST_RANGE, CAPTCHA_MAX_COUNTER_RANGE,
+            CaptchaConfigUpdateRequest, CreateRegistrationUrlRequest,
+            DomainMigrationConfigUpdateRequest, EXPERIMENT_MAX_TARGETED_USERS,
+            ExperimentDeliveryConfigUpdateRequest, GatewayRolloutConfigUpdateRequest,
+            GatewayRolloutMode, InstanceAttachmentDecayUpdateRequest,
+            InstanceBlueskyIntegrationUpdateRequest, InstanceBlueskyKeyIntegrationUpdateRequest,
             InstanceConfigUpdateRequest, InstanceEmailIntegrationUpdateRequest,
             InstanceEmailSmtpIntegrationUpdateRequest, InstanceEmailSmtpTestRequest,
             InstanceGifIntegrationUpdateRequest, InstanceIntegrationsUpdateRequest,
             InstanceMediaUpdateRequest, InstancePolicyUpdateRequest,
             InstanceRegistrationConfigUpdateRequest, InstanceServicesUpdateRequest,
             InstanceYoutubeIntegrationUpdateRequest, LimitConfigUpdateRequest, LimitRule,
-            LimitRuleFilters, PremiumMode, RegistrationMode, SsoConfigUpdateRequest,
-            VoiceE2eeScope,
+            LimitRuleFilters, PlutoniumPageConfigUpdateRequest, PremiumMode,
+            PushRelayConfigUpdateRequest, RegistrationMode, SsoConfigUpdateRequest, VoiceE2eeScope,
         },
     },
     config::AdminConfig,
@@ -44,8 +46,8 @@ pub struct ActionQuery {
     pub rule: Option<String>,
 }
 
-pub fn redirect_back_with_flash(base: &str, path: &str, fd: FlashData, prod: bool) -> Response {
-    flash::redirect_with_flash(&format!("{base}{path}"), fd, prod)
+pub fn redirect_back_with_flash(base: &str, path: &str, fd: FlashData, secure: bool) -> Response {
+    flash::redirect_with_flash(&format!("{base}{path}"), fd, secure)
 }
 
 pub async fn gateway_post(
@@ -63,7 +65,7 @@ pub async fn gateway_post(
                 base,
                 "/gateway",
                 FlashData::error("Invalid form data"),
-                config.is_production(),
+                config.secure_cookies(),
             );
         }
     };
@@ -80,7 +82,7 @@ pub async fn gateway_post(
     } else {
         FlashData::error("Unknown gateway action")
     };
-    redirect_back_with_flash(base, "/gateway", flash, config.is_production())
+    redirect_back_with_flash(base, "/gateway", flash, config.secure_cookies())
 }
 
 pub async fn search_index_post(
@@ -97,7 +99,7 @@ pub async fn search_index_post(
                 base,
                 "/search-index",
                 FlashData::error("Invalid form data"),
-                config.is_production(),
+                config.secure_cookies(),
             );
         }
     };
@@ -114,7 +116,7 @@ pub async fn search_index_post(
                 flash::redirect_with_flash(
                     &format!("{base}/search-index?job_id={job_id}"),
                     FlashData::success("Search index refresh started"),
-                    config.is_production(),
+                    config.secure_cookies(),
                 )
             }
             Err(error) => {
@@ -123,7 +125,7 @@ pub async fn search_index_post(
                     base,
                     "/search-index",
                     FlashData::error("Failed to start search index refresh"),
-                    config.is_production(),
+                    config.secure_cookies(),
                 )
             }
         };
@@ -132,7 +134,7 @@ pub async fn search_index_post(
         base,
         "/search-index",
         FlashData::error("Index type is required"),
-        config.is_production(),
+        config.secure_cookies(),
     )
 }
 
@@ -157,7 +159,7 @@ pub async fn instance_config_post(
                 base,
                 "/instance-config",
                 flash,
-                config.is_production(),
+                config.secure_cookies(),
             );
         }
     };
@@ -190,7 +192,9 @@ pub async fn instance_config_post(
         }
         "update_policy" => {
             let update = build_policy_update(&form);
-            instance_config_result(client.update_instance_config(&update).await)
+            let result = client.update_instance_config(&update).await;
+            remember_premium_branding(&state, &result);
+            instance_config_result(result)
         }
         "update_integrations" => {
             let update = build_integrations_update(&form);
@@ -200,6 +204,34 @@ pub async fn instance_config_post(
             let update = build_media_update(&form);
             instance_config_result(client.update_instance_config(&update).await)
         }
+        "update_billing" => match super::billing_actions::build_billing_update(&form) {
+            Ok(update) => {
+                let result = client.update_instance_config(&update).await;
+                remember_premium_branding(&state, &result);
+                super::billing_actions::billing_result(result)
+            }
+            Err(message) => FlashData::error(message),
+        },
+        "update_push_relay" => {
+            let update = build_push_relay_update(&form);
+            instance_config_result(client.update_instance_config(&update).await)
+        }
+        "update_domain_migration" => match build_domain_migration_update(&form) {
+            Ok(update) => instance_config_result(client.update_instance_config(&update).await),
+            Err(message) => FlashData::error(message),
+        },
+        "update_plutonium_page" => match build_plutonium_page_update(&form) {
+            Ok(update) => instance_config_result(client.update_instance_config(&update).await),
+            Err(message) => FlashData::error(message),
+        },
+        "update_captcha" => match build_captcha_update(&form) {
+            Ok(update) => instance_config_result(client.update_instance_config(&update).await),
+            Err(message) => FlashData::error(message),
+        },
+        "update_experiment_delivery" => match build_experiment_delivery_update(&form) {
+            Ok(update) => instance_config_result(client.update_instance_config(&update).await),
+            Err(message) => FlashData::error(message),
+        },
         "test_smtp" => match build_smtp_test_request(&form) {
             Ok(request) => match client.test_instance_smtp_config(&request).await {
                 Ok(response) if response.ok => FlashData::success("SMTP connection verified"),
@@ -216,7 +248,11 @@ pub async fn instance_config_post(
             Err(message) => FlashData::error(message),
         },
         "disable_single_community" => {
-            let update = build_disable_single_community_update();
+            let update = build_single_community_update(false);
+            instance_config_result(client.update_instance_config(&update).await)
+        }
+        "enable_single_community" => {
+            let update = build_single_community_update(true);
             instance_config_result(client.update_instance_config(&update).await)
         }
         "create_registration_url" => match build_create_registration_url_request(&form) {
@@ -316,7 +352,18 @@ pub async fn instance_config_post(
     if htmx::is_htmx_request(&headers) {
         return htmx::toast_response(&flash);
     }
-    redirect_back_with_flash(base, "/instance-config", flash, config.is_production())
+    redirect_back_with_flash(base, "/instance-config", flash, config.secure_cookies())
+}
+
+fn remember_premium_branding(
+    state: &AppState,
+    result: &Result<crate::api::types::InstanceConfigResponse, crate::api::client::ApiError>,
+) {
+    if let Ok(instance_config) = result {
+        state.remember_premium_branding(crate::api::types::PremiumBranding::from_instance_config(
+            instance_config,
+        ));
+    }
 }
 
 fn render_registration_url_list_response(
@@ -397,12 +444,7 @@ fn build_sso_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
             allowed_domains: Some(allowed),
             redirect_uri: None,
         }),
-        gateway_rollout: None,
-        registration: None,
-        app_public: None,
-        policy: None,
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
 }
 
@@ -433,13 +475,224 @@ fn build_gateway_rollout_update(form: &MultiValueForm) -> InstanceConfigUpdateRe
                 .parse_u64("gateway_rollout_max_concurrent_guild_starts"),
             voice_e2ee_scope,
         }),
-        sso: None,
-        registration: None,
-        app_public: None,
-        policy: None,
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
+}
+
+const EXPERIMENT_ROLLOUT_BASIS_POINTS_MAX: u32 = 10_000;
+const EXPERIMENT_MAX_ROLLOUT_SALT_CHARS: usize = 64;
+const EXPERIMENT_MAX_SNOWFLAKE_LENGTH: usize = 20;
+const EXPERIMENT_MIN_POLL_INTERVAL_SECONDS: u64 = 60;
+const EXPERIMENT_MAX_POLL_INTERVAL_SECONDS: u64 = 86_400;
+const EXPERIMENT_MAX_POLL_JITTER_PERCENT: u32 = 50;
+
+fn parse_form_number<T>(
+    form: &MultiValueForm,
+    key: &str,
+    label: &str,
+    min: T,
+    max: T,
+) -> Result<Option<T>, String>
+where
+    T: std::str::FromStr + Ord + std::fmt::Display,
+{
+    let Some(raw) = form.first(key) else {
+        return Ok(None);
+    };
+    let invalid = || format!("{label} must be a whole number between {min} and {max}");
+    let value = raw.trim().parse::<T>().map_err(|_| invalid())?;
+    if value < min || value > max {
+        return Err(invalid());
+    }
+    Ok(Some(value))
+}
+
+fn parse_experiment_rollout_salt(
+    form: &MultiValueForm,
+    key: &str,
+) -> Result<Option<String>, String> {
+    let Some(raw) = form.first(key) else {
+        return Ok(None);
+    };
+    let salt = raw.trim();
+    if salt.is_empty() || salt.encode_utf16().count() > EXPERIMENT_MAX_ROLLOUT_SALT_CHARS {
+        return Err(format!(
+            "Rollout salt must be between 1 and {EXPERIMENT_MAX_ROLLOUT_SALT_CHARS} characters"
+        ));
+    }
+    if !salt
+        .bytes()
+        .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+    {
+        return Err("Rollout salt must use printable ASCII".to_owned());
+    }
+    Ok(Some(salt.to_owned()))
+}
+
+fn is_experiment_snowflake(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= EXPERIMENT_MAX_SNOWFLAKE_LENGTH
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn parse_experiment_user_ids(value: &str, label: &str) -> Result<Vec<String>, String> {
+    let mut ids: Vec<String> = Vec::new();
+    for (index, candidate) in value.split([',', '\n', '\r']).enumerate() {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        if !is_experiment_snowflake(candidate) {
+            return Err(format!(
+                "{label} entry {} must contain 1 to 20 decimal digits",
+                index + 1
+            ));
+        }
+        if ids.iter().any(|existing| existing == candidate) {
+            continue;
+        }
+        if ids.len() == EXPERIMENT_MAX_TARGETED_USERS {
+            return Err(format!(
+                "{label} must contain at most {EXPERIMENT_MAX_TARGETED_USERS} unique IDs"
+            ));
+        }
+        ids.push(candidate.to_owned());
+    }
+    Ok(ids)
+}
+
+fn build_push_relay_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
+    InstanceConfigUpdateRequest {
+        push_relay: Some(PushRelayConfigUpdateRequest {
+            relay_consent_accepted: Some(form.bool_value("push_relay_consent_accepted")),
+        }),
+        ..Default::default()
+    }
+}
+
+fn build_domain_migration_update(
+    form: &MultiValueForm,
+) -> Result<InstanceConfigUpdateRequest, String> {
+    Ok(InstanceConfigUpdateRequest {
+        domain_migration: Some(DomainMigrationConfigUpdateRequest {
+            enabled: Some(form.bool_value("domain_migration_enabled")),
+            rollout_basis_points: parse_form_number(
+                form,
+                "domain_migration_rollout_basis_points",
+                "Rollout basis points",
+                0,
+                EXPERIMENT_ROLLOUT_BASIS_POINTS_MAX,
+            )?,
+            rollout_salt: parse_experiment_rollout_salt(form, "domain_migration_rollout_salt")?,
+            included_user_ids: Some(parse_experiment_user_ids(
+                form.first("domain_migration_included_user_ids")
+                    .unwrap_or_default(),
+                "Included user IDs",
+            )?),
+            included_guild_ids: Some(parse_experiment_user_ids(
+                form.first("domain_migration_included_guild_ids")
+                    .unwrap_or_default(),
+                "Included guild IDs",
+            )?),
+            include_premium_users: Some(form.bool_value("domain_migration_include_premium_users")),
+            excluded_user_ids: Some(parse_experiment_user_ids(
+                form.first("domain_migration_excluded_user_ids")
+                    .unwrap_or_default(),
+                "Excluded user IDs",
+            )?),
+            anonymous_rollout_basis_points: parse_form_number(
+                form,
+                "domain_migration_anonymous_rollout_basis_points",
+                "Anonymous rollout basis points",
+                0,
+                EXPERIMENT_ROLLOUT_BASIS_POINTS_MAX,
+            )?,
+            standalone_forwarding: Some(form.bool_value("domain_migration_standalone_forwarding")),
+        }),
+        ..Default::default()
+    })
+}
+
+fn build_plutonium_page_update(
+    form: &MultiValueForm,
+) -> Result<InstanceConfigUpdateRequest, String> {
+    Ok(InstanceConfigUpdateRequest {
+        plutonium_page: Some(PlutoniumPageConfigUpdateRequest {
+            enabled: Some(form.bool_value("plutonium_page_enabled")),
+            rollout_basis_points: parse_form_number(
+                form,
+                "plutonium_page_rollout_basis_points",
+                "Rollout basis points",
+                0,
+                EXPERIMENT_ROLLOUT_BASIS_POINTS_MAX,
+            )?,
+            rollout_salt: parse_experiment_rollout_salt(form, "plutonium_page_rollout_salt")?,
+            included_user_ids: Some(parse_experiment_user_ids(
+                form.first("plutonium_page_included_user_ids")
+                    .unwrap_or_default(),
+                "Included user IDs",
+            )?),
+            included_guild_ids: Some(parse_experiment_user_ids(
+                form.first("plutonium_page_included_guild_ids")
+                    .unwrap_or_default(),
+                "Included guild IDs",
+            )?),
+            include_premium_users: Some(form.bool_value("plutonium_page_include_premium_users")),
+            excluded_user_ids: Some(parse_experiment_user_ids(
+                form.first("plutonium_page_excluded_user_ids")
+                    .unwrap_or_default(),
+                "Excluded user IDs",
+            )?),
+        }),
+        ..Default::default()
+    })
+}
+
+fn build_captcha_update(form: &MultiValueForm) -> Result<InstanceConfigUpdateRequest, String> {
+    Ok(InstanceConfigUpdateRequest {
+        captcha: Some(CaptchaConfigUpdateRequest {
+            enabled: Some(form.bool_value("captcha_enabled")),
+            cost: parse_form_number(
+                form,
+                "captcha_cost",
+                "Cost",
+                *CAPTCHA_COST_RANGE.start(),
+                *CAPTCHA_COST_RANGE.end(),
+            )?,
+            max_counter: parse_form_number(
+                form,
+                "captcha_max_counter",
+                "Maximum counter",
+                *CAPTCHA_MAX_COUNTER_RANGE.start(),
+                *CAPTCHA_MAX_COUNTER_RANGE.end(),
+            )?,
+        }),
+        ..Default::default()
+    })
+}
+
+fn build_experiment_delivery_update(
+    form: &MultiValueForm,
+) -> Result<InstanceConfigUpdateRequest, String> {
+    Ok(InstanceConfigUpdateRequest {
+        experiment_delivery: Some(ExperimentDeliveryConfigUpdateRequest {
+            poll_interval_seconds: parse_form_number(
+                form,
+                "experiment_delivery_poll_interval_seconds",
+                "Poll interval",
+                EXPERIMENT_MIN_POLL_INTERVAL_SECONDS,
+                EXPERIMENT_MAX_POLL_INTERVAL_SECONDS,
+            )?,
+            poll_jitter_percent: parse_form_number(
+                form,
+                "experiment_delivery_poll_jitter_percent",
+                "Poll jitter",
+                0,
+                EXPERIMENT_MAX_POLL_JITTER_PERCENT,
+            )?,
+        }),
+        ..Default::default()
+    })
 }
 
 fn build_registration_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
@@ -450,27 +703,19 @@ fn build_registration_update(form: &MultiValueForm) -> InstanceConfigUpdateReque
         _ => None,
     };
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
         registration: Some(InstanceRegistrationConfigUpdateRequest {
             mode,
             admin_registration_urls_enabled: Some(
                 form.bool_value("admin_registration_urls_enabled"),
             ),
         }),
-        sso: None,
-        app_public: None,
-        policy: None,
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
 }
 
 fn build_app_public_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
     let optional = |key: &str| Some(form.clean(key));
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
-        registration: None,
-        sso: None,
         app_public: Some(AppPublicConfigUpdateRequest {
             branding: Some(AppBrandingConfigUpdateRequest {
                 product_name: form.clean("app_product_name"),
@@ -480,6 +725,9 @@ fn build_app_public_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest
                 wordmark_url: optional("app_wordmark_url"),
                 favicon_url: optional("app_favicon_url"),
                 theme_color: optional("app_theme_color"),
+                status_page_url: optional("app_status_page_url"),
+                status_page_incident_history_url: optional("app_status_page_incident_history_url"),
+                ..Default::default()
             }),
             setup: Some(AppSetupConfigUpdateRequest {
                 configured: Some(form.bool_value("app_setup_configured")),
@@ -487,18 +735,13 @@ fn build_app_public_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest
             legal: None,
             registration: None,
         }),
-        policy: None,
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
 }
 
 fn build_app_legal_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
     let optional = |key: &str| Some(form.clean(key));
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
-        registration: None,
-        sso: None,
         app_public: Some(AppPublicConfigUpdateRequest {
             branding: None,
             setup: None,
@@ -508,17 +751,12 @@ fn build_app_legal_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest 
             }),
             registration: None,
         }),
-        policy: None,
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
 }
 
 fn build_app_registration_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
-        registration: None,
-        sso: None,
         app_public: Some(AppPublicConfigUpdateRequest {
             branding: None,
             setup: None,
@@ -527,15 +765,16 @@ fn build_app_registration_update(form: &MultiValueForm) -> InstanceConfigUpdateR
                 collect_date_of_birth: Some(form.bool_value("app_collect_date_of_birth")),
             }),
         }),
-        policy: None,
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
 }
 
 fn build_policy_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
     let direct_messages_disabled = form
         .first("policy_direct_messages_disabled")
+        .map(|value| value == "true");
+    let guild_create_access = form
+        .first("policy_guild_create_access")
         .map(|value| value == "true");
     let premium_mode = match form.first("policy_premium_mode") {
         Some("mirror") => Some(PremiumMode::Mirror),
@@ -544,19 +783,15 @@ fn build_policy_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
     };
     let services = build_services_update(form);
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
-        registration: None,
-        sso: None,
-        app_public: None,
         policy: Some(InstancePolicyUpdateRequest {
             single_community_enabled: None,
             single_community_name: None,
             direct_messages_disabled,
+            guild_create_access,
             premium_mode,
             services,
         }),
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
 }
 
@@ -596,24 +831,12 @@ fn build_integrations_update(form: &MultiValueForm) -> InstanceConfigUpdateReque
         _ => None,
     };
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
-        registration: None,
-        sso: None,
-        app_public: None,
-        policy: None,
         integrations: Some(InstanceIntegrationsUpdateRequest {
             gif: Some(InstanceGifIntegrationUpdateRequest {
                 klipy_api_key: clean("integration_klipy_api_key"),
             }),
             youtube: Some(InstanceYoutubeIntegrationUpdateRequest {
                 api_key: clean("integration_youtube_api_key"),
-            }),
-            captcha: Some(InstanceCaptchaIntegrationUpdateRequest {
-                provider: clean("integration_captcha_provider"),
-                hcaptcha_site_key: clean("integration_hcaptcha_site_key"),
-                hcaptcha_secret_key: clean("integration_hcaptcha_secret_key"),
-                turnstile_site_key: clean("integration_turnstile_site_key"),
-                turnstile_secret_key: clean("integration_turnstile_secret_key"),
             }),
             email: Some(InstanceEmailIntegrationUpdateRequest {
                 enabled: Some(form.bool_value("integration_email_enabled")),
@@ -641,7 +864,7 @@ fn build_integrations_update(form: &MultiValueForm) -> InstanceConfigUpdateReque
                 keys: bluesky_keys,
             }),
         }),
-        media: None,
+        ..Default::default()
     }
 }
 
@@ -651,12 +874,6 @@ fn build_media_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
             .and_then(|value| value.trim().parse::<f64>().ok())
     };
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
-        registration: None,
-        sso: None,
-        app_public: None,
-        policy: None,
-        integrations: None,
         media: Some(InstanceMediaUpdateRequest {
             attachment_decay: Some(InstanceAttachmentDecayUpdateRequest {
                 enabled: Some(form.bool_value("media_attachment_decay_enabled")),
@@ -670,6 +887,7 @@ fn build_media_update(form: &MultiValueForm) -> InstanceConfigUpdateRequest {
                 renew_window_days: form.parse_u32("media_attachment_decay_renew_window_days"),
             }),
         }),
+        ..Default::default()
     }
 }
 
@@ -696,21 +914,13 @@ fn build_smtp_test_request(form: &MultiValueForm) -> Result<InstanceEmailSmtpTes
     })
 }
 
-fn build_disable_single_community_update() -> InstanceConfigUpdateRequest {
+fn build_single_community_update(enabled: bool) -> InstanceConfigUpdateRequest {
     InstanceConfigUpdateRequest {
-        gateway_rollout: None,
-        registration: None,
-        sso: None,
-        app_public: None,
         policy: Some(InstancePolicyUpdateRequest {
-            single_community_enabled: Some(false),
-            single_community_name: None,
-            direct_messages_disabled: None,
-            premium_mode: None,
-            services: None,
+            single_community_enabled: Some(enabled),
+            ..Default::default()
         }),
-        integrations: None,
-        media: None,
+        ..Default::default()
     }
 }
 
@@ -835,13 +1045,13 @@ pub async fn limit_config_post(
                 base,
                 "/limit-config",
                 FlashData::error("Invalid form data"),
-                config.is_production(),
+                config.secure_cookies(),
             );
         }
     };
     let client = AdminApiClient::new(state.http_client(), config, &auth.0.session);
     let action = aq.action.as_deref().unwrap_or("");
-    let is_prod = config.is_production();
+    let secure_cookies = config.secure_cookies();
     let current = match client.get_limit_config().await {
         Ok(current) => current,
         Err(error) => {
@@ -850,7 +1060,7 @@ pub async fn limit_config_post(
                 base,
                 "/limit-config",
                 FlashData::error("Failed to fetch current limit configuration"),
-                is_prod,
+                secure_cookies,
             );
         }
     };
@@ -864,7 +1074,7 @@ pub async fn limit_config_post(
                         base,
                         "/limit-config",
                         FlashData::error("Rule not found"),
-                        is_prod,
+                        secure_cookies,
                     );
                 }
             };
@@ -877,7 +1087,7 @@ pub async fn limit_config_post(
                     base,
                     "/limit-config",
                     FlashData::error("Rule not found"),
-                    is_prod,
+                    secure_cookies,
                 );
             };
             let fallback = current
@@ -892,7 +1102,7 @@ pub async fn limit_config_post(
                 "Limit configuration updated",
                 "Failed to update limit configuration",
             );
-            return redirect_back_with_flash(base, "/limit-config", flash, is_prod);
+            return redirect_back_with_flash(base, "/limit-config", flash, secure_cookies);
         }
         "delete" => {
             let rule_id = match aq.rule.as_deref().and_then(clean_string) {
@@ -902,7 +1112,7 @@ pub async fn limit_config_post(
                         base,
                         "/limit-config",
                         FlashData::error("Rule not found"),
-                        is_prod,
+                        secure_cookies,
                     );
                 }
             };
@@ -911,7 +1121,7 @@ pub async fn limit_config_post(
                     base,
                     "/limit-config",
                     FlashData::error("The default rule cannot be deleted"),
-                    is_prod,
+                    secure_cookies,
                 );
             }
             let old_len = limit_config.rules.len();
@@ -921,14 +1131,14 @@ pub async fn limit_config_post(
                     base,
                     "/limit-config",
                     FlashData::error("Rule not found"),
-                    is_prod,
+                    secure_cookies,
                 );
             }
             let request = LimitConfigUpdateRequest { limit_config };
             let result = client.update_limit_config(&request).await;
             let flash =
                 limit_config_result(result, "Limit rule deleted", "Failed to delete limit rule");
-            return redirect_back_with_flash(base, "/limit-config", flash, is_prod);
+            return redirect_back_with_flash(base, "/limit-config", flash, secure_cookies);
         }
         "create" => {
             let rule_id = match form.clean("rule_id") {
@@ -938,7 +1148,7 @@ pub async fn limit_config_post(
                         base,
                         "/limit-config",
                         FlashData::error("Rule ID is required"),
-                        is_prod,
+                        secure_cookies,
                     );
                 }
             };
@@ -947,7 +1157,7 @@ pub async fn limit_config_post(
                     base,
                     "/limit-config",
                     FlashData::error("The default rule ID is reserved"),
-                    is_prod,
+                    secure_cookies,
                 );
             }
             if limit_config.rules.iter().any(|rule| rule.id == rule_id) {
@@ -955,7 +1165,7 @@ pub async fn limit_config_post(
                     base,
                     "/limit-config",
                     FlashData::error("Rule ID already exists"),
-                    is_prod,
+                    secure_cookies,
                 );
             }
             let limits = current.defaults.get("default").cloned().unwrap_or_default();
@@ -969,7 +1179,7 @@ pub async fn limit_config_post(
             let result = client.update_limit_config(&request).await;
             let flash =
                 limit_config_result(result, "Limit rule created", "Failed to create limit rule");
-            return redirect_back_with_flash(base, "/limit-config", flash, is_prod);
+            return redirect_back_with_flash(base, "/limit-config", flash, secure_cookies);
         }
         _ => {}
     }
@@ -977,7 +1187,7 @@ pub async fn limit_config_post(
         base,
         "/limit-config",
         FlashData::success("Limit config updated"),
-        is_prod,
+        secure_cookies,
     )
 }
 
@@ -1033,6 +1243,381 @@ mod tests {
             filters.guild_features,
             vec!["COMMUNITY".to_owned(), "NEWS".to_owned()]
         );
+    }
+
+    #[test]
+    fn parse_experiment_user_ids_splits_newlines_and_commas() {
+        assert_eq!(
+            parse_experiment_user_ids("  1 ,2\n3\r\n 4 ,, 5 ", "Included user IDs")
+                .expect("valid IDs"),
+            vec![
+                "1".to_owned(),
+                "2".to_owned(),
+                "3".to_owned(),
+                "4".to_owned(),
+                "5".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_experiment_user_ids_dedupes_preserving_order() {
+        assert_eq!(
+            parse_experiment_user_ids("20,10,20,10,30", "Included user IDs").expect("valid IDs"),
+            vec!["20".to_owned(), "10".to_owned(), "30".to_owned()]
+        );
+    }
+
+    #[test]
+    fn parse_experiment_user_ids_rejects_non_digit_and_overlong_values() {
+        for value in [
+            "abc",
+            "12a",
+            "-1",
+            "1.0",
+            "999999999999999999999",
+            "<script>",
+        ] {
+            assert_eq!(
+                parse_experiment_user_ids(&format!("123,{value}"), "Included user IDs")
+                    .expect_err("invalid ID"),
+                "Included user IDs entry 2 must contain 1 to 20 decimal digits",
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_experiment_user_ids_rejects_exceeding_the_cap() {
+        let value = (0..EXPERIMENT_MAX_TARGETED_USERS)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let ids = parse_experiment_user_ids(&format!("{value}\n999"), "Included user IDs")
+            .expect("valid IDs at cap");
+        assert_eq!(ids.len(), EXPERIMENT_MAX_TARGETED_USERS);
+        assert_eq!(ids.last(), Some(&"999".to_owned()));
+        assert_eq!(
+            parse_experiment_user_ids(&format!("{value}\n1000"), "Included user IDs")
+                .expect_err("too many IDs"),
+            "Included user IDs must contain at most 1000 unique IDs"
+        );
+    }
+
+    #[test]
+    fn build_domain_migration_update_reads_the_rollout_fields() {
+        let form = MultiValueForm::parse(
+            b"domain_migration_enabled=true&domain_migration_rollout_basis_points=%20250%20&domain_migration_rollout_salt=%20domain-migration-v2%20&domain_migration_included_user_ids=1500000000000000001%0A1500000000000000002&domain_migration_excluded_user_ids=1500000000000000003%2C%201500000000000000004&domain_migration_anonymous_rollout_basis_points=%20100%20&domain_migration_standalone_forwarding=true&domain_migration_included_guild_ids=1500000000000000005%0A1500000000000000006%2C1500000000000000005&domain_migration_include_premium_users=true",
+        );
+        let update = build_domain_migration_update(&form)
+            .expect("valid form")
+            .domain_migration
+            .expect("domain migration update");
+        assert_eq!(update.enabled, Some(true));
+        assert_eq!(update.rollout_basis_points, Some(250));
+        assert_eq!(update.rollout_salt, Some("domain-migration-v2".to_owned()));
+        assert_eq!(
+            update.included_user_ids,
+            Some(vec![
+                "1500000000000000001".to_owned(),
+                "1500000000000000002".to_owned()
+            ])
+        );
+        assert_eq!(
+            update.excluded_user_ids,
+            Some(vec![
+                "1500000000000000003".to_owned(),
+                "1500000000000000004".to_owned()
+            ])
+        );
+        assert_eq!(update.anonymous_rollout_basis_points, Some(100));
+        assert_eq!(update.standalone_forwarding, Some(true));
+        assert_eq!(update.include_premium_users, Some(true));
+        assert_eq!(
+            update.included_guild_ids,
+            Some(vec![
+                "1500000000000000005".to_owned(),
+                "1500000000000000006".to_owned()
+            ])
+        );
+    }
+
+    #[test]
+    fn build_domain_migration_update_leaves_the_feature_inert_when_nothing_is_submitted() {
+        let form = MultiValueForm::parse(b"_csrf=token");
+        let request = build_domain_migration_update(&form).expect("valid form");
+        assert_eq!(
+            serde_json::to_value(request).expect("serializable update"),
+            serde_json::json!({"domain_migration": {
+                "enabled": false,
+                "included_user_ids": [],
+                "included_guild_ids": [],
+                "include_premium_users": false,
+                "excluded_user_ids": [],
+                "standalone_forwarding": false,
+            }})
+        );
+    }
+
+    #[test]
+    fn build_domain_migration_update_rejects_invalid_rollout_fields() {
+        for (form, message) in [
+            (
+                "domain_migration_rollout_basis_points=10001",
+                "Rollout basis points must be a whole number between 0 and 10000",
+            ),
+            (
+                "domain_migration_anonymous_rollout_basis_points=10001",
+                "Anonymous rollout basis points must be a whole number between 0 and 10000",
+            ),
+            (
+                "domain_migration_anonymous_rollout_basis_points=abc",
+                "Anonymous rollout basis points must be a whole number between 0 and 10000",
+            ),
+            (
+                "domain_migration_rollout_salt=%20%20",
+                "Rollout salt must be between 1 and 64 characters",
+            ),
+            (
+                format!("domain_migration_rollout_salt={}", "x".repeat(65)).as_str(),
+                "Rollout salt must be between 1 and 64 characters",
+            ),
+            (
+                "domain_migration_rollout_salt=caf%C3%A9",
+                "Rollout salt must use printable ASCII",
+            ),
+            (
+                "domain_migration_included_user_ids=123%2Cinvalid",
+                "Included user IDs entry 2 must contain 1 to 20 decimal digits",
+            ),
+            (
+                "domain_migration_excluded_user_ids=123%2Cinvalid",
+                "Excluded user IDs entry 2 must contain 1 to 20 decimal digits",
+            ),
+        ] {
+            let form = MultiValueForm::parse(form.as_bytes());
+            assert_eq!(
+                build_domain_migration_update(&form).expect_err("invalid rollout field"),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn build_push_relay_update_reads_the_consent_checkbox() {
+        let unchecked = build_push_relay_update(&MultiValueForm::parse(b"_csrf=token"));
+        assert_eq!(
+            serde_json::to_value(&unchecked).expect("serialize update"),
+            serde_json::json!({"push_relay": {"relay_consent_accepted": false}})
+        );
+
+        let checked = build_push_relay_update(&MultiValueForm::parse(
+            b"_csrf=token&push_relay_consent_accepted=true",
+        ));
+        assert_eq!(
+            serde_json::to_value(&checked).expect("serialize update"),
+            serde_json::json!({"push_relay": {"relay_consent_accepted": true}})
+        );
+    }
+
+    #[test]
+    fn build_captcha_update_reads_the_switch_and_difficulty_fields() {
+        let form = MultiValueForm::parse(
+            b"captcha_enabled=true&captcha_cost=%202000%20&captcha_max_counter=400",
+        );
+        let update = build_captcha_update(&form)
+            .expect("valid form")
+            .captcha
+            .expect("captcha update");
+        assert_eq!(update.enabled, Some(true));
+        assert_eq!(update.cost, Some(2000));
+        assert_eq!(update.max_counter, Some(400));
+    }
+
+    #[test]
+    fn build_captcha_update_turns_the_check_off_when_the_box_is_unchecked() {
+        let form = MultiValueForm::parse(b"_csrf=token");
+        let request = build_captcha_update(&form).expect("valid form");
+        assert_eq!(
+            serde_json::to_value(request).expect("serializable update"),
+            serde_json::json!({"captcha": {"enabled": false}})
+        );
+    }
+
+    #[test]
+    fn build_captcha_update_rejects_difficulty_outside_the_supported_range() {
+        for (form, message) in [
+            (
+                "captcha_cost=999",
+                "Cost must be a whole number between 1000 and 20000",
+            ),
+            (
+                "captcha_cost=20001",
+                "Cost must be a whole number between 1000 and 20000",
+            ),
+            (
+                "captcha_max_counter=99",
+                "Maximum counter must be a whole number between 100 and 20000",
+            ),
+            (
+                "captcha_max_counter=20001",
+                "Maximum counter must be a whole number between 100 and 20000",
+            ),
+        ] {
+            let form = MultiValueForm::parse(form.as_bytes());
+            assert_eq!(
+                build_captcha_update(&form).expect_err("invalid field"),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn domain_migration_update_rejects_an_invalid_included_guild_id() {
+        let form = MultiValueForm::parse(
+            b"domain_migration_included_guild_ids=1500000000000000005%0Anot-a-guild",
+        );
+        assert_eq!(
+            build_domain_migration_update(&form).expect_err("invalid guild id"),
+            "Included guild IDs entry 2 must contain 1 to 20 decimal digits"
+        );
+    }
+
+    #[test]
+    fn build_plutonium_page_update_reads_the_rollout_fields() {
+        let form = MultiValueForm::parse(
+            b"plutonium_page_enabled=true&plutonium_page_rollout_basis_points=%20500%20&plutonium_page_rollout_salt=%20plutonium-page-v2%20&plutonium_page_included_user_ids=1500000000000000001&plutonium_page_excluded_user_ids=1500000000000000002&plutonium_page_included_guild_ids=1500000000000000005%0A1500000000000000006%2C1500000000000000005&plutonium_page_include_premium_users=true",
+        );
+        let update = build_plutonium_page_update(&form)
+            .expect("valid form")
+            .plutonium_page
+            .expect("plutonium page update");
+        assert_eq!(update.enabled, Some(true));
+        assert_eq!(update.rollout_basis_points, Some(500));
+        assert_eq!(update.rollout_salt, Some("plutonium-page-v2".to_owned()));
+        assert_eq!(update.include_premium_users, Some(true));
+        assert_eq!(
+            update.included_guild_ids,
+            Some(vec![
+                "1500000000000000005".to_owned(),
+                "1500000000000000006".to_owned()
+            ])
+        );
+        assert_eq!(
+            update.included_user_ids,
+            Some(vec!["1500000000000000001".to_owned()])
+        );
+        assert_eq!(
+            update.excluded_user_ids,
+            Some(vec!["1500000000000000002".to_owned()])
+        );
+    }
+
+    #[test]
+    fn build_plutonium_page_update_leaves_the_feature_inert_when_nothing_is_submitted() {
+        let form = MultiValueForm::parse(b"_csrf=token");
+        let request = build_plutonium_page_update(&form).expect("valid form");
+        assert_eq!(
+            serde_json::to_value(request).expect("serializable update"),
+            serde_json::json!({"plutonium_page": {
+                "enabled": false,
+                "included_user_ids": [],
+                "included_guild_ids": [],
+                "include_premium_users": false,
+                "excluded_user_ids": [],
+            }})
+        );
+    }
+
+    #[test]
+    fn build_plutonium_page_update_rejects_invalid_rollout_fields() {
+        for (form, message) in [
+            (
+                "plutonium_page_rollout_basis_points=10001",
+                "Rollout basis points must be a whole number between 0 and 10000",
+            ),
+            (
+                "plutonium_page_included_guild_ids=1500000000000000005%0Anot-a-guild",
+                "Included guild IDs entry 2 must contain 1 to 20 decimal digits",
+            ),
+        ] {
+            let form = MultiValueForm::parse(form.as_bytes());
+            assert_eq!(
+                build_plutonium_page_update(&form).expect_err("invalid field"),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn build_experiment_delivery_update_leaves_both_fields_unchanged_when_absent() {
+        let form = MultiValueForm::parse(b"_csrf=token");
+        let request = build_experiment_delivery_update(&form).expect("valid form");
+        assert_eq!(
+            serde_json::to_value(request).expect("serializable update"),
+            serde_json::json!({"experiment_delivery": {}})
+        );
+    }
+
+    #[test]
+    fn build_experiment_delivery_update_rejects_invalid_numbers() {
+        for (key, message, below_min, above_max) in [
+            (
+                "experiment_delivery_poll_interval_seconds",
+                "Poll interval must be a whole number between 60 and 86400",
+                "59",
+                "86401",
+            ),
+            (
+                "experiment_delivery_poll_jitter_percent",
+                "Poll jitter must be a whole number between 0 and 50",
+                "-1",
+                "51",
+            ),
+        ] {
+            for value in [
+                "",
+                "%20%20",
+                "abc",
+                "-1",
+                "1.5",
+                "9999999999999999999999999",
+                below_min,
+                above_max,
+            ] {
+                let form = MultiValueForm::parse(format!("{key}={value}").as_bytes());
+                assert_eq!(
+                    build_experiment_delivery_update(&form).expect_err("invalid number"),
+                    message,
+                    "{key}={value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_experiment_delivery_update_accepts_inclusive_bounds() {
+        for (interval, jitter) in [(60, 0), (86_400, 50)] {
+            let form = MultiValueForm::parse(format!("experiment_delivery_poll_interval_seconds={interval}&experiment_delivery_poll_jitter_percent={jitter}").as_bytes());
+            let request = build_experiment_delivery_update(&form).expect("valid form");
+            assert_eq!(
+                serde_json::to_value(request).expect("serializable update"),
+                serde_json::json!({"experiment_delivery": {"poll_interval_seconds": interval, "poll_jitter_percent": jitter}})
+            );
+        }
+    }
+
+    #[test]
+    fn build_experiment_delivery_update_accepts_padded_numbers() {
+        let form = MultiValueForm::parse(
+            b"experiment_delivery_poll_interval_seconds=%20900%20&experiment_delivery_poll_jitter_percent=%2025%20",
+        );
+        let update = build_experiment_delivery_update(&form)
+            .expect("valid form")
+            .experiment_delivery
+            .expect("experiment delivery update");
+        assert_eq!(update.poll_interval_seconds, Some(900));
+        assert_eq!(update.poll_jitter_percent, Some(25));
     }
 
     #[test]

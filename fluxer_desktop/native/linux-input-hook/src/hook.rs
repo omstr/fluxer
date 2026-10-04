@@ -170,11 +170,7 @@ struct KeysymCache {
 impl KeysymCache {
     fn build(reply: &GetKeyboardMappingReply, min_keycode: Keycode) -> Self {
         let per = reply.keysyms_per_keycode as usize;
-        let count = if per == 0 {
-            0
-        } else {
-            reply.keysyms.len() / per
-        };
+        let count = reply.keysyms.len().checked_div(per).unwrap_or(0);
         let mut syms = Vec::with_capacity(count);
         if per > 0 {
             for i in 0..count {
@@ -583,7 +579,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decoded_keydown_carries_keysym_and_name() {
+    fn decoded_keydown_has_keysym_and_name() {
         let mut event = DecodedEvent::new(EventKind::KeyDown, modifiers::from_state(0));
         event.keycode = 0x0061;
         event.key_name = keymap::keysym_to_name(0x0061).unwrap().to_string();

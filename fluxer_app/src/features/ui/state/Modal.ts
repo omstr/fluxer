@@ -134,6 +134,13 @@ class ModalState {
 		};
 	}
 
+	releasePortalHost(host: HTMLElement): void {
+		if (!this.modals.some((modal) => modal.portalHost === host)) return;
+		this.modals = this.modals.map((modal) =>
+			modal.portalHost === host ? {...modal, portalHost: null, ownerDocument: this.resolveOwnerDocument(null)} : modal,
+		);
+	}
+
 	pop(key?: string | number, ownerDocument?: Document): void {
 		let removed: ModalEntry | undefined;
 		let wasTopmost = false;
@@ -198,6 +205,10 @@ class ModalState {
 				isTopmost: index === topmostIndex,
 			};
 		});
+	}
+
+	getKeyAtStackIndex(stackIndex: number, ownerDocument: Document = document): string | undefined {
+		return this.modals.filter((modal) => modal.ownerDocument === ownerDocument)[stackIndex]?.key;
 	}
 
 	getModal(ownerDocument: Document = document): ModalEntry | undefined {

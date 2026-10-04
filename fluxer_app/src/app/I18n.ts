@@ -5,6 +5,7 @@ import AppStorage from '@app/features/platform/state/PersistentStorage';
 import {getNativeLocaleIdentifier} from '@app/features/platform/types/Platform';
 import {Logger} from '@app/features/platform/utils/AppLogger';
 import {loadLazyModule} from '@app/features/platform/utils/LazyModuleLoader';
+import {noteLocale} from '@app/features/theme/fonts/ScriptFontLoader';
 import {type I18n, i18n, type Messages} from '@lingui/core';
 import {createAtom, runInAction} from 'mobx';
 
@@ -52,6 +53,11 @@ const supportedLocaleSet = new Set<LocaleCode>(supportedLocales);
 const logger = new Logger('i18n');
 const LANGUAGE_OVERRIDES: Record<string, LocaleCode> = {
 	en: 'en-US',
+	es: 'es-ES',
+	nb: 'no',
+	pt: 'pt-BR',
+	sv: 'sv-SE',
+	zh: 'zh-CN',
 };
 
 type LocaleLoader = () => Promise<{
@@ -115,20 +121,36 @@ function formatLocaleValue(value: string): string {
 	return `${language}-${region}`;
 }
 
-export function normalizeLocale(value?: string | null): LocaleCode {
-	if (!value) {
-		return DEFAULT_LOCALE;
-	}
+function resolveLocale(value: string): LocaleCode | null {
 	const formatted = formatLocaleValue(value);
 	if (!formatted) {
-		return DEFAULT_LOCALE;
+		return null;
 	}
 	if (supportedLocaleSet.has(formatted as LocaleCode)) {
 		return formatted as LocaleCode;
 	}
-	const [language] = formatted.split('-');
+	const segments = formatted.split('-');
+	const [language, scriptOrRegion, region] = segments;
 	if (!language) {
-		return DEFAULT_LOCALE;
+		return null;
+	}
+	if (language === 'zh') {
+		if (scriptOrRegion === 'HANT') {
+			return 'zh-TW';
+		}
+		if (scriptOrRegion === 'HANS') {
+			return 'zh-CN';
+		}
+		if (scriptOrRegion === 'HK' || scriptOrRegion === 'MO') {
+			return 'zh-TW';
+		}
+	}
+	const regionCode = scriptOrRegion?.length === 4 ? region : scriptOrRegion;
+	if (regionCode) {
+		const regionalLocale = `${language}-${regionCode}`;
+		if (supportedLocaleSet.has(regionalLocale as LocaleCode)) {
+			return regionalLocale as LocaleCode;
+		}
 	}
 	const override = LANGUAGE_OVERRIDES[language];
 	if (override) {
@@ -138,14 +160,22 @@ export function normalizeLocale(value?: string | null): LocaleCode {
 	if (fallback) {
 		return fallback;
 	}
-	return DEFAULT_LOCALE;
+	return null;
 }
 
-function detectBrowserLocale(): string | null {
-	if (Array.isArray(navigator.languages) && navigator.languages.length > 0) {
-		return navigator.languages[0];
+export function normalizeLocale(value?: string | null): LocaleCode {
+	return value ? (resolveLocale(value) ?? DEFAULT_LOCALE) : DEFAULT_LOCALE;
+}
+
+function detectBrowserLocale(): LocaleCode | null {
+	const preferredLanguages = navigator.languages?.length ? navigator.languages : [navigator.language];
+	for (const language of preferredLanguages) {
+		const locale = resolveLocale(language);
+		if (locale) {
+			return locale;
+		}
 	}
-	return navigator.language ?? null;
+	return null;
 }
 
 function detectPreferredLocale(forceLocale?: string): LocaleCode {
@@ -172,32 +202,38 @@ function activateLocale(localeCode: LocaleCode, messages: Messages): void {
 	if (typeof document !== 'undefined') {
 		document.documentElement.lang = localeCode;
 	}
+	noteLocale(localeCode);
 	AppStorage.setItem('locale', localeCode);
 }
 
-const inFlightLoads = new Map<LocaleCode, Promise<LocaleCode>>();
+const inFlightLoads = new Map<LocaleCode, Promise<Messages>>();
+let requestedLocale: LocaleCode | null = null;
 
 export async function loadLocaleCatalog(localeCode: string): Promise<LocaleCode> {
 	const normalized = normalizeLocale(localeCode);
-	const inFlight = inFlightLoads.get(normalized);
-	if (inFlight) {
-		return inFlight;
+	requestedLocale = normalized;
+	if (normalized === i18n.locale) {
+		return normalized;
 	}
-	const loadPromise = (async () => {
-		try {
-			const {messages} = await loadLazyModule(loaders[normalized]);
-			activateLocale(normalized, messages);
-			return normalized;
-		} finally {
-			inFlightLoads.delete(normalized);
-		}
-	})();
-	inFlightLoads.set(normalized, loadPromise);
-	return loadPromise;
+	let loadPromise = inFlightLoads.get(normalized);
+	if (!loadPromise) {
+		loadPromise = loadLazyModule(loaders[normalized])
+			.then(({messages}) => messages)
+			.finally(() => {
+				inFlightLoads.delete(normalized);
+			});
+		inFlightLoads.set(normalized, loadPromise);
+	}
+	const messages = await loadPromise;
+	if (requestedLocale === normalized && i18n.locale !== normalized) {
+		activateLocale(normalized, messages);
+	}
+	return normalized;
 }
 
 export function applyLocaleChange(localeCode: string): LocaleCode {
 	const normalized = normalizeLocale(localeCode);
+	requestedLocale = normalized;
 	if (normalized === i18n.locale) {
 		AppStorage.setItem('locale', normalized);
 		return normalized;

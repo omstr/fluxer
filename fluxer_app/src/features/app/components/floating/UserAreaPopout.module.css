@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 
-.container {
-	width: 20rem;
-}
-
 .customStatusRow {
 	display: flex;
 	align-items: center;
@@ -236,6 +232,8 @@
 }
 
 .accountMenuDiscriminator {
+	margin-left: 0.25rem;
+	font-size: 0.75rem;
 	color: var(--text-tertiary);
 	font-weight: 400;
 }

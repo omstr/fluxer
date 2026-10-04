@@ -50,7 +50,7 @@ safe_presence_lookup(Request) ->
 -spec build_presence_request(session_state()) -> map().
 build_presence_request(State) when is_map(State) ->
     FriendIds = presence_targets:friend_ids_from_state(State),
-    DmRecipients = presence_targets:dm_recipients_from_state(State),
+    GroupDmRecipients = presence_targets:group_dm_recipients_from_state(State),
     #{
         user_id => maps:get(user_id, State),
         user_data => maps:get(user_data, State),
@@ -58,7 +58,7 @@ build_presence_request(State) when is_map(State) ->
         status => maps:get(status, State),
         activities => maps:get(activities, State, null),
         friend_ids => FriendIds,
-        group_dm_recipients => DmRecipients,
+        group_dm_recipients => GroupDmRecipients,
         custom_status => maps:get(custom_status, State, null)
     }.
 
@@ -72,7 +72,7 @@ do_session_connect(Pid, Attempt, State) when is_map(State) ->
     Activities = maps:get(activities, State, null),
     SocketPid = maps:get(socket_pid, State, undefined),
     FriendIds = presence_targets:friend_ids_from_state(State),
-    DmRecipients = presence_targets:dm_recipients_from_state(State),
+    GroupDmRecipients = presence_targets:group_dm_recipients_from_state(State),
     try_session_connect(
         Pid,
         SessionId,
@@ -82,7 +82,7 @@ do_session_connect(Pid, Attempt, State) when is_map(State) ->
         Activities,
         SocketPid,
         FriendIds,
-        DmRecipients,
+        GroupDmRecipients,
         Attempt,
         State
     ).

@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from 'vitest';
-import type {ApiTestHarness} from '../../test/ApiTestHarness';
-import {createBuilder, createBuilderWithoutAuth} from '../../test/TestRequestBuilder';
 import {
 	createAuthHarness,
 	createTestAccount,
@@ -11,7 +8,12 @@ import {
 	enableSso,
 	setUserACLs,
 	type TestAccount,
-} from './AuthTestUtils';
+} from '@app/api/auth/tests/AuthTestUtils';
+import {setupTestGuildWithMembers} from '@app/api/guild/tests/GuildTestUtils';
+import {getInstanceConfigRepository} from '@app/api/middleware/ServiceSingletons';
+import type {ApiTestHarness} from '@app/api/test/ApiTestHarness';
+import {createBuilder, createBuilderWithoutAuth} from '@app/api/test/TestRequestBuilder';
+import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 interface SsoStartResponse {
 	authorization_url: string;
@@ -90,7 +92,7 @@ describe('Auth SSO flow', () => {
 		});
 		it('rejects enforced SSO config that cannot resolve claims', async () => {
 			await createBuilder(harness, admin.token)
-				.post('/admin/instance-config/update')
+				.patch('/admin/instance/config')
 				.body({
 					sso: {
 						enabled: true,
@@ -131,6 +133,7 @@ describe('Auth SSO flow', () => {
 				.body({redirect_to: '/me'})
 				.execute();
 			expect(startData.state).toBeTruthy();
+			expect(startData.state.startsWith('m.')).toBe(false);
 			expect(startData.authorization_url).toBeTruthy();
 			const authUrlString = startData.authorization_url;
 			expect(authUrlString).toContain(`state=${startData.state}`);
@@ -179,7 +182,8 @@ describe('Auth SSO flow', () => {
 			expect(startData.redirect_uri).not.toContain('evil.example');
 			expect(startData.authorization_url).toContain(encodeURIComponent(startData.redirect_uri));
 		});
-		it('uses the requested mobile SSO redirect URI without changing the post-login redirect', async () => {
+		it('routes mobile SSO through the default redirect URI without changing the post-login redirect', async () => {
+			const status = await createBuilderWithoutAuth<{redirect_uri: string}>(harness).get('/auth/sso/status').execute();
 			const startData = await createBuilderWithoutAuth<SsoStartResponse>(harness)
 				.post('/auth/sso/start')
 				.body({
@@ -187,8 +191,10 @@ describe('Auth SSO flow', () => {
 					redirect_uri: 'fluxer://auth/sso/callback',
 				})
 				.execute();
-			expect(startData.redirect_uri).toBe('fluxer://auth/sso/callback');
-			expect(getAuthorizationUrlParam(startData.authorization_url, 'redirect_uri')).toBe('fluxer://auth/sso/callback');
+			expect(startData.redirect_uri).toBe(status.redirect_uri);
+			expect(getAuthorizationUrlParam(startData.authorization_url, 'redirect_uri')).toBe(status.redirect_uri);
+			expect(startData.state.startsWith('m.')).toBe(true);
+			expect(getAuthorizationUrlParam(startData.authorization_url, 'state')).toBe(startData.state);
 			const email = `sso-mobile-redirect-${Date.now()}@example.com`;
 			const completeData = await createBuilderWithoutAuth<SsoCompleteResponse>(harness)
 				.post('/auth/sso/complete')
@@ -458,7 +464,7 @@ describe('Auth SSO flow', () => {
 		});
 		it('rejects invalid allowed domains during config update', async () => {
 			await createBuilder(harness, admin.token)
-				.post('/admin/instance-config/update')
+				.patch('/admin/instance/config')
 				.body({
 					sso: {
 						enabled: true,
@@ -477,7 +483,7 @@ describe('Auth SSO flow', () => {
 		});
 		it('rejects unsafe provider URLs during config update', async () => {
 			await createBuilder(harness, admin.token)
-				.post('/admin/instance-config/update')
+				.patch('/admin/instance/config')
 				.body({
 					sso: {
 						enabled: true,
@@ -504,8 +510,7 @@ describe('Auth SSO flow', () => {
 					allowed_domains: Array<string>;
 				};
 			}>(harness, admin.token)
-				.post('/admin/instance-config/get')
-				.body({})
+				.get('/admin/instance/config')
 				.execute();
 			expect(config.sso.allowed_domains).toEqual(['example.com', 'xn--bcher-kva.example']);
 		});
@@ -539,6 +544,29 @@ describe('Auth SSO flow', () => {
 					state: startData.state,
 				})
 				.expect(403)
+				.execute();
+		});
+		it('joins a provisioned user to the single community', async () => {
+			const {owner, guild} = await setupTestGuildWithMembers(harness, 0);
+			await getInstanceConfigRepository().setInstancePolicyConfig({
+				single_community_enabled: true,
+				single_community_guild_id: guild.id,
+			});
+			await enableSso(harness, admin.token);
+			const startData = await createBuilderWithoutAuth<SsoStartResponse>(harness)
+				.post('/auth/sso/start')
+				.body({})
+				.execute();
+			const completeData = await createBuilderWithoutAuth<SsoCompleteResponse>(harness)
+				.post('/auth/sso/complete')
+				.body({
+					code: `sso-single-community-${Date.now()}@example.com`,
+					state: startData.state,
+				})
+				.execute();
+			await createBuilder(harness, owner.token)
+				.get(`/guilds/${guild.id}/members/${completeData.user_id}`)
+				.expect(200)
 				.execute();
 		});
 	});
@@ -715,7 +743,7 @@ describe('Auth SSO flow', () => {
 		});
 		it('does not advertise enabled SSO when optional SSO cannot resolve claims', async () => {
 			await createBuilder(harness, admin.token)
-				.post('/admin/instance-config/update')
+				.patch('/admin/instance/config')
 				.body({
 					sso: {
 						enabled: true,

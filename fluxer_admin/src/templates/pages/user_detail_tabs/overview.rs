@@ -11,7 +11,10 @@ use crate::{
         form::{checkbox, csrf_input, form_actions, submit_button},
         page_container::{card_with_header, detail_row},
     },
-    utils::{bigint::format_discriminator, timestamps::snowflake_creation_date},
+    utils::{
+        bigint::format_discriminator,
+        timestamps::{format_admin_timestamp, snowflake_creation_date},
+    },
 };
 use maud::{Markup, html};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -501,6 +504,22 @@ fn render_overview_tab(
                         @if let Some(reason) = &user.deletion_public_reason {
                             div class="mt-1" { "Public reason: " (reason) }
                         }
+                        @if let Some(reason) = &user.deletion_audit_log_reason {
+                            div class="mt-1" { "Private reason: " (reason) }
+                        }
+                        div class="mt-1" {
+                            "Scheduled by "
+                            @match user.deletion_scheduled_by.as_deref() {
+                                Some(id) if id == user.id => { "the user" }
+                                Some(id) => {
+                                    a href={(config.base_path) "/users/" (id)} class="underline" { (id) }
+                                }
+                                None => { "an unrecorded source" }
+                            }
+                            @if let Some(at) = user.deletion_scheduled_at.as_deref() {
+                                " on " (format_admin_timestamp(at))
+                            }
+                        }
                     }
                 }
             }
@@ -551,13 +570,6 @@ fn render_overview_tab(
                             }
                         }))
                     }
-                    (detail_row("Phone", html! {
-                        @if user.has_verified_phone {
-                            span class="text-green-700" { "Verified" }
-                        } @else {
-                            span class="text-neutral-400" { "Not verified" }
-                        }
-                    }))
                     @if acl::has_permission(admin_acls, acl::USER_VIEW_DOB) {
                         (detail_row("Date of Birth", html! {
                             (user.date_of_birth.as_deref().unwrap_or("Not set"))
@@ -683,8 +695,6 @@ fn flags_card(
     csrf_token: &str,
 ) -> Markup {
     let can_update_flags = acl::has_permission(admin_acls, acl::USER_UPDATE_FLAGS);
-    let can_update_suspicious =
-        acl::has_permission(admin_acls, acl::USER_UPDATE_SUSPICIOUS_ACTIVITY);
     html! {
         div class="space-y-6" {
             (u64_flag_form(
@@ -710,18 +720,6 @@ fn flags_card(
                 csrf_token,
                 can_update_flags,
                 Some(acl::USER_UPDATE_FLAGS),
-            ))
-            (i32_flag_form(
-                config,
-                &user.id,
-                "Suspicious Activity Flags",
-                "update_suspicious_flags",
-                "suspicious_flags[]",
-                user.suspicious_activity_flags,
-                admin_flags::SUSPICIOUS_ACTIVITY_FLAGS,
-                csrf_token,
-                can_update_suspicious,
-                Some(acl::USER_UPDATE_SUSPICIOUS_ACTIVITY),
             ))
         }
     }
@@ -865,11 +863,6 @@ fn acls_card(
                                 (flag_checkbox("acls[]", item.to_string(), item, checked, true))
                             }
                         }
-                        @for item in &user.acls {
-                            @if !acl::ALL_ACLS.iter().any(|known| known == &item.as_str()) {
-                                input type="hidden" name="acls[]" value=(item);
-                            }
-                        }
                         (form_actions(html! {
                             (submit_button("Save ACLs"))
                         }))
@@ -987,6 +980,8 @@ fn traits_form(
     }
 }
 
+const DERIVED_TRAITS: [&str; 1] = ["premium"];
+
 fn parse_trait_definitions(limit_config: Option<&LimitConfigResponse>) -> Vec<&str> {
     limit_config
         .map(|response| {
@@ -996,6 +991,7 @@ fn parse_trait_definitions(limit_config: Option<&LimitConfigResponse>) -> Vec<&s
                 .iter()
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
+                .filter(|value| !DERIVED_TRAITS.contains(value))
                 .collect()
         })
         .unwrap_or_default()
@@ -1006,6 +1002,7 @@ fn custom_traits<'a>(user: &'a AdminUser, trait_definitions: &[&str]) -> Vec<&'a
         .iter()
         .map(String::as_str)
         .filter(|trait_name| !trait_definitions.contains(trait_name))
+        .filter(|trait_name| !DERIVED_TRAITS.contains(trait_name))
         .collect()
 }
 

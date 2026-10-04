@@ -97,6 +97,7 @@ const BLOCK_NODE_TYPES = new Set<NodeType>([
 ]);
 const COPYABLE_CHANNEL_MENTION_TYPES = new Set<number>([
 	ChannelTypes.GUILD_TEXT,
+	ChannelTypes.GUILD_ANNOUNCEMENT,
 	ChannelTypes.GUILD_VOICE,
 	ChannelTypes.GUILD_LINK,
 	ChannelTypes.GUILD_CATEGORY,
@@ -364,14 +365,8 @@ function renderMentionToPlaintext(node: MentionNode, options: PlaintextRenderOpt
 			if (!user) {
 				return `@${kind.id}`;
 			}
-			let name = user.displayName;
-			if (options.channelId) {
-				const channel = Channels.getChannel(options.channelId);
-				if (channel?.guildId) {
-					name = NicknameUtils.getNickname(user, channel.guildId) || name;
-				}
-			}
-			return `@${name}`;
+			const channel = options.channelId ? Channels.getChannel(options.channelId) : null;
+			return `@${NicknameUtils.getNickname(user, channel?.guildId ?? null, options.channelId)}`;
 		}
 		case MentionKind.Role: {
 			const channel = options.channelId ? Channels.getChannel(options.channelId) : null;

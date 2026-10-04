@@ -3,7 +3,13 @@
 import {existsSync, mkdirSync, readdirSync, writeFileSync} from 'node:fs';
 import path, {dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {CopyRspackPlugin, DefinePlugin, HtmlRspackPlugin, SwcJsMinimizerRspackPlugin} from '@rspack/core';
+import {
+	CopyRspackPlugin,
+	DefinePlugin,
+	HtmlRspackPlugin,
+	LightningCssMinimizerRspackPlugin,
+	SwcJsMinimizerRspackPlugin,
+} from '@rspack/core';
 import {createPoFileRule, getLinguiSwcPluginConfig} from './scripts/build/rspack/lingui.mjs';
 import {staticFilesPlugin} from './scripts/build/rspack/static-files.mjs';
 
@@ -206,6 +212,7 @@ export default () => {
 		devtool: 'source-map',
 		target: ['web', 'browserslist'],
 		lazyCompilation: false,
+		performance: false,
 		resolve: {
 			alias: {
 				...resolveArboriumWasmAliases(),
@@ -279,8 +286,23 @@ export default () => {
 					},
 				},
 				{
+					test: /[\\/]@sapphi-red[\\/]web-noise-suppressor[\\/]dist[\\/][^\\/]+[\\/]workletProcessor\.js$/,
+					type: 'asset/resource',
+					use: [{loader: path.join(ROOT_DIR, 'scripts/build/rspack/noise-suppressor-worklet-loader.cjs')}],
+					generator: {
+						filename: isProduction ? 'assets/[contenthash:16].worklet.js' : 'assets/[name].[hash].worklet.js',
+					},
+				},
+				{
+					test: /[\\/]src[\\/].+\.worklet\.js$/,
+					type: 'asset/resource',
+					generator: {
+						filename: isProduction ? 'assets/[contenthash:16].worklet.js' : 'assets/[name].[hash].worklet.js',
+					},
+				},
+				{
 					test: /\.(tsx|ts|jsx|js)$/,
-					exclude: /node_modules/,
+					exclude: [/node_modules/, /\.worklet\.js$/],
 					type: 'javascript/auto',
 					parser: {
 						dynamicImport: true,
@@ -292,11 +314,8 @@ export default () => {
 								parser: {
 									syntax: 'typescript',
 									tsx: true,
-									decorators: true,
 								},
 								transform: {
-									legacyDecorator: true,
-									decoratorMetadata: true,
 									react: {
 										runtime: 'automatic',
 										development: isDevelopment,
@@ -316,7 +335,7 @@ export default () => {
 					test: /\.module\.css$/,
 					use: [{loader: 'postcss-loader'}],
 					type: 'css/module',
-					parser: {namedExports: false},
+					parser: {namedExports: false, dashedIdents: false, grid: false, container: false},
 				},
 				{
 					test: /\.css$/,
@@ -372,7 +391,21 @@ export default () => {
 					},
 				},
 				{
-					test: /\.(png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf|eot|mp3|wav|ogg|mp4|webm)$/,
+					test: /[\\/]deepfilternet3[\\/][^\\/]+\.tar\.gz$/,
+					type: 'asset/resource',
+					generator: {
+						filename: isProduction ? 'assets/[contenthash:16].tar.gz' : 'assets/[name].[hash].tar.gz',
+					},
+				},
+				{
+					test: /\.onnx$/,
+					type: 'asset/resource',
+					generator: {
+						filename: isProduction ? 'assets/[contenthash:16][ext]' : 'assets/[name].[hash][ext]',
+					},
+				},
+				{
+					test: /\.(png|jpg|jpeg|gif|webp|avif|ico|woff|woff2|ttf|eot|mp3|wav|ogg|mp4|webm)$/,
 					type: 'asset/resource',
 					generator: {
 						filename: isProduction ? 'assets/[contenthash:16][ext]' : 'assets/[name].[hash][ext]',
@@ -411,7 +444,11 @@ export default () => {
 					},
 				],
 			}),
-			staticFilesPlugin({staticCdnEndpoint: normalizedStaticCdnEndpoint}),
+			staticFilesPlugin({
+				staticCdnEndpoint: normalizedStaticCdnEndpoint,
+				fontsDir: path.join(MONOREPO_ROOT, 'packages', 'fonts'),
+				wasmCratesDir: path.join(ROOT_DIR, 'rust'),
+			}),
 			new DefinePlugin({
 				__FLUXER_PRECACHE_MANIFEST__: JSON.stringify([]),
 				__FLUXER_SW_VERSION__: JSON.stringify(publicValues.PUBLIC_BUILD_VERSION || 'dev'),
@@ -458,7 +495,7 @@ export default () => {
 								priority: 55,
 								reuseExistingChunk: true,
 								enforce: true,
-								chunks: 'async',
+								chunks: (chunk) => !chunk.canBeInitial() && !isWorkerPath({chunk}),
 							},
 							livekit: {
 								test: /[\\/]node_modules[\\/](livekit-client|@livekit)[\\/]/,
@@ -484,6 +521,13 @@ export default () => {
 								name: 'mobx',
 								priority: 43,
 								reuseExistingChunk: true,
+							},
+							i18n: {
+								test: /[\\/]node_modules[\\/]@lingui[\\/]/,
+								name: 'i18n',
+								priority: 42,
+								reuseExistingChunk: true,
+								enforce: true,
 							},
 							reactAria: {
 								test: /[\\/]node_modules[\\/]react-aria-components[\\/]/,
@@ -575,7 +619,9 @@ export default () => {
 					compress: true,
 					mangle: true,
 					format: {comments: false},
+					exclude: /\.worklet\.js$/,
 				}),
+				new LightningCssMinimizerRspackPlugin(),
 			],
 		},
 		devServer: {
@@ -592,6 +638,5 @@ export default () => {
 				watch: false,
 			},
 		},
-		experiments: {css: true},
 	};
 };

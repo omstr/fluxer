@@ -1,6 +1,35 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {randomUUID} from 'node:crypto';
+import {createUserID, type UserID} from '@app/api/BrandedTypes';
+import {Config} from '@app/api/Config';
+import {getContentMessage} from '@app/api/content_i18n/ContentI18n';
+import type {UserRow} from '@app/api/database/types/UserTypes';
+import {Logger} from '@app/api/Logger';
+import {getBillingRepository} from '@app/api/middleware/ServiceRegistry';
+import type {User} from '@app/api/models/User';
+import type {StoreEntitlementService} from '@app/api/store_billing/StoreEntitlementService';
+import {getBillingBranding} from '@app/api/stripe/BillingBranding';
+import {getEffectiveBillingConfig, isCurrentCatalogPriceId} from '@app/api/stripe/BillingConfigCache';
+import type {ProductInfo, ProductRegistry} from '@app/api/stripe/ProductRegistry';
+import {getCachedStripePriceSummary, type StripePriceSummary} from '@app/api/stripe/StripePriceSummaryCache';
+import {
+	canProvisionPremiumFromSubscriptionStatus,
+	getPremiumWillCancelFromSubscription,
+} from '@app/api/stripe/StripeSubscriptionAccessPolicy';
+import {
+	getPrimarySubscriptionItem,
+	getSubscriptionPremiumPeriodEnd,
+	getSubscriptionStartDate,
+} from '@app/api/stripe/StripeSubscriptionPeriod';
+import {extractId} from '@app/api/stripe/StripeUtils';
+import type {IUserRepository} from '@app/api/user/IUserRepository';
+import {
+	type Currency,
+	getCurrencyPreferences,
+	getGiftCurrencyPreferences,
+	isLocalizedCurrency,
+} from '@app/api/utils/CurrencyUtils';
 import {isEuEeaCountryCode} from '@fluxer/constants/src/EuropeanEconomicArea';
 import {PremiumFlags, UserPremiumTypes} from '@fluxer/constants/src/UserConstants';
 import {PurchaseEmailVerificationRequiredError} from '@fluxer/errors/src/domains/auth/EmailVerificationRequiredError';
@@ -13,41 +42,15 @@ import {StripePaymentNotAvailableError} from '@fluxer/errors/src/domains/payment
 import {UnclaimedAccountCannotMakePurchasesError} from '@fluxer/errors/src/domains/user/UnclaimedAccountCannotMakePurchasesError';
 import {UnknownUserError} from '@fluxer/errors/src/domains/user/UnknownUserError';
 import type {CheckoutPaymentMethod} from '@fluxer/schema/src/domains/premium/GiftCodeSchemas';
-import type {PricingMode} from '@fluxer/schema/src/domains/premium/PremiumSchemas';
 import type {ICacheService} from '@pkgs/cache/src/ICacheService';
 import {seconds} from 'itty-time';
 import type Stripe from 'stripe';
-import {createUserID, type UserID} from '../../BrandedTypes';
-import {Config} from '../../Config';
-import {getContentMessage} from '../../content_i18n/ContentI18n';
-import type {UserRow} from '../../database/types/UserTypes';
-import {Logger} from '../../Logger';
-import {getBillingRepository} from '../../middleware/ServiceRegistry';
-import type {User} from '../../models/User';
-import type {IUserRepository} from '../../user/IUserRepository';
-import {
-	type Currency,
-	getBaseCurrencyPreferences,
-	getBaseGiftCurrencyPreferences,
-	getCurrencyPreferences,
-	getGiftCurrencyPreferences,
-} from '../../utils/CurrencyUtils';
-import type {ProductInfo, ProductRegistry} from '../ProductRegistry';
-import {
-	canProvisionPremiumFromSubscriptionStatus,
-	getPremiumWillCancelFromSubscription,
-} from '../StripeSubscriptionAccessPolicy';
-import {
-	getPrimarySubscriptionItem,
-	getSubscriptionPremiumPeriodEnd,
-	getSubscriptionStartDate,
-} from '../StripeSubscriptionPeriod';
-import {extractId} from '../StripeUtils';
 
-const PRODUCT_NAME = 'Fluxer';
-const PREMIUM_TIER_NAME = 'Plutonium';
-const TERMS_URL = 'https://fluxer.app/terms';
 export const EU_WITHDRAWAL_WAIVER_TEXT_VERSION = '2026-04-23';
+
+function isStripeResourceMissingError(error: unknown): boolean {
+	return typeof error === 'object' && error !== null && 'code' in error && error.code === 'resource_missing';
+}
 
 type CheckoutSessionCreateParams = Stripe.Checkout.SessionCreateParams;
 type CheckoutSessionMode = CheckoutSessionCreateParams['mode'];
@@ -86,12 +89,10 @@ export interface CreateCheckoutSessionParams {
 	clientGeoipCountryCode?: string | null;
 	purchaseGeoipCountryCode?: string | null;
 	euWithdrawalWaiverAccepted?: boolean;
-	pricingMode?: PricingMode;
 	paymentMethod?: CheckoutPaymentMethod;
 	isBusiness?: boolean;
 }
 
-const UPI_MANDATE_DESCRIPTION = 'Fluxer Premium';
 const PIX_UPI_MANDATE_HEADROOM_MULTIPLIER = 1.25;
 
 interface ResolvedPriceIds {
@@ -100,7 +101,7 @@ interface ResolvedPriceIds {
 	gift_1_month: string | null;
 	gift_1_year: string | null;
 	currency: Currency;
-	gift_currency: Currency;
+	gift_currency: Currency | null;
 }
 
 interface PriceIdsResponse extends ResolvedPriceIds {
@@ -108,10 +109,6 @@ interface PriceIdsResponse extends ResolvedPriceIds {
 	yearly_amount_minor: number | null;
 	gift_1_month_amount_minor: number | null;
 	gift_1_year_amount_minor: number | null;
-}
-
-interface StripePriceSummary {
-	unitAmountMinor: number | null;
 }
 
 interface EuWithdrawalWaiverContext {
@@ -172,6 +169,7 @@ export class StripeCheckoutService {
 		private userRepository: IUserRepository,
 		private productRegistry: ProductRegistry,
 		private cacheService: ICacheService,
+		private storeEntitlementService: StoreEntitlementService | null = null,
 	) {}
 
 	async createCheckoutSession({
@@ -182,7 +180,6 @@ export class StripeCheckoutService {
 		clientGeoipCountryCode,
 		purchaseGeoipCountryCode,
 		euWithdrawalWaiverAccepted,
-		pricingMode = 'localized',
 		paymentMethod = 'card',
 		isBusiness = false,
 	}: CreateCheckoutSessionParams): Promise<string> {
@@ -191,7 +188,7 @@ export class StripeCheckoutService {
 			priceId,
 			isGift,
 			countryCode,
-			pricingMode,
+			purchaseGeoipCountryCode,
 		});
 		const isRecurringSubscription = this.productRegistry.isRecurringSubscription(productInfo);
 		const checkoutMode: CheckoutSessionMode = isRecurringSubscription ? 'subscription' : 'payment';
@@ -209,6 +206,8 @@ export class StripeCheckoutService {
 			priceId,
 		});
 		const paymentMethodTypes = this.resolvePaymentMethodTypes(paymentMethod);
+		const branding = await getBillingBranding();
+		const billing = getEffectiveBillingConfig();
 		const checkoutMetadata = {
 			user_id: userId.toString(),
 			price_id: priceId,
@@ -221,25 +220,28 @@ export class StripeCheckoutService {
 			eu_withdrawal_waiver_accepted: waiverContext.accepted ? 'true' : 'false',
 			...(waiverContext.acceptedAt ? {eu_withdrawal_waiver_accepted_at: waiverContext.acceptedAt.toISOString()} : {}),
 			eu_withdrawal_waiver_text_version: EU_WITHDRAWAL_WAIVER_TEXT_VERSION,
-			pricing_mode: pricingMode,
 			payment_method: paymentMethod,
 		};
 		const checkoutParams: CheckoutSessionCreateParams = {
 			customer: customerId,
 			client_reference_id: userId.toString(),
 			metadata: checkoutMetadata,
-			consent_collection: {
-				terms_of_service: 'required',
-			},
-			custom_text: {
-				terms_of_service_acceptance: {
-					message: getContentMessage('billing.eu_withdrawal_waiver_checkout', user.locale, {
-						product_name: PRODUCT_NAME,
-						premium_tier_name: PREMIUM_TIER_NAME,
-						terms_url: TERMS_URL,
-					}),
-				},
-			},
+			...(billing.termsConsentRequired
+				? {
+						consent_collection: {
+							terms_of_service: 'required',
+						},
+						custom_text: {
+							terms_of_service_acceptance: {
+								message: getContentMessage('billing.eu_withdrawal_waiver_checkout', user.locale, {
+									product_name: branding.productName,
+									premium_tier_name: branding.premiumName,
+									terms_url: branding.termsUrl,
+								}),
+							},
+						},
+					}
+				: {}),
 			line_items: [
 				{
 					price: priceId,
@@ -257,10 +259,10 @@ export class StripeCheckoutService {
 					}
 				: {}),
 			automatic_tax: {
-				enabled: true,
+				enabled: billing.automaticTax,
 			},
 			tax_id_collection: {
-				enabled: true,
+				enabled: billing.taxIdCollection,
 			},
 			customer_update: {
 				address: 'auto',
@@ -301,7 +303,6 @@ export class StripeCheckoutService {
 		clientGeoipCountryCode,
 		purchaseGeoipCountryCode,
 		euWithdrawalWaiverAccepted,
-		pricingMode = 'localized',
 		isBusiness = false,
 	}: Pick<
 		CreateCheckoutSessionParams,
@@ -310,23 +311,15 @@ export class StripeCheckoutService {
 		| 'euWithdrawalWaiverAccepted'
 		| 'isBusiness'
 		| 'priceId'
-		| 'pricingMode'
 		| 'purchaseGeoipCountryCode'
 		| 'userId'
 	>): Promise<string> {
 		if (!this.stripe) {
 			throw new StripePaymentNotAvailableError();
 		}
-		const normalizedCountryCode = countryCode?.trim().toUpperCase();
+		const normalizedCountryCode = this.resolveEnforcedPricingCountryCode({countryCode, purchaseGeoipCountryCode});
 		if (!normalizedCountryCode) {
 			Logger.error({priceId, userId}, 'Localized card preapproval requires a country code');
-			throw new StripeInvalidProductConfigurationError();
-		}
-		if (pricingMode !== 'localized') {
-			Logger.error(
-				{priceId, userId, pricingMode},
-				'Localized card preapproval requested for non-localized pricing mode',
-			);
 			throw new StripeInvalidProductConfigurationError();
 		}
 		const {customerId, productInfo} = await this.prepareCheckoutContext({
@@ -334,7 +327,6 @@ export class StripeCheckoutService {
 			priceId,
 			isGift: false,
 			countryCode: normalizedCountryCode,
-			pricingMode,
 		});
 		if (!this.requiresLocalizedCardPreapproval(productInfo)) {
 			Logger.error(
@@ -364,7 +356,6 @@ export class StripeCheckoutService {
 				eu_withdrawal_waiver_accepted: waiverContext.accepted ? 'true' : 'false',
 				...(waiverContext.acceptedAt ? {eu_withdrawal_waiver_accepted_at: waiverContext.acceptedAt.toISOString()} : {}),
 				...(waiverContext.required ? {eu_withdrawal_waiver_text_version: EU_WITHDRAWAL_WAIVER_TEXT_VERSION} : {}),
-				pricing_mode: pricingMode,
 				setup_type: 'localized_card_preapproval',
 				localized_card_preapproval_currency: productInfo.currency,
 				localized_card_preapproval_token: token,
@@ -375,7 +366,7 @@ export class StripeCheckoutService {
 			success_url: `${Config.endpoints.webApp}/premium-callback?status=preapproval-success&token=${encodeURIComponent(token)}`,
 			cancel_url: `${Config.endpoints.webApp}/premium-callback?status=preapproval-cancel`,
 			tax_id_collection: {
-				enabled: true,
+				enabled: getEffectiveBillingConfig().taxIdCollection,
 			},
 			billing_address_collection: isBusiness ? 'required' : 'auto',
 			customer_update: {
@@ -560,7 +551,7 @@ export class StripeCheckoutService {
 		priceId,
 		isGift = false,
 		countryCode,
-		pricingMode = 'localized',
+		purchaseGeoipCountryCode,
 	}: CreateCheckoutSessionParams): Promise<{
 		customerId: string;
 		productInfo: ProductInfo;
@@ -581,12 +572,18 @@ export class StripeCheckoutService {
 			);
 			throw new StripeInvalidProductConfigurationError();
 		}
-		if (this.requiresCountryCodeForLocalizedCurrency(productInfo.currency) && !countryCode) {
+		const billing = getEffectiveBillingConfig();
+		if (billing.catalogMode === 'operator' && !isCurrentCatalogPriceId(priceId, billing)) {
+			Logger.error({priceId, userId}, 'Checkout requested for a price outside the current operator catalog');
+			throw new StripeInvalidProductError();
+		}
+		const enforcedCountryCode = this.resolveEnforcedPricingCountryCode({countryCode, purchaseGeoipCountryCode});
+		if (this.requiresCountryCodeForLocalizedCurrency(productInfo.currency) && !enforcedCountryCode) {
 			Logger.error({priceId, userId, currency: productInfo.currency}, 'Localized price requested without country code');
 			throw new StripeInvalidProductConfigurationError();
 		}
-		if (countryCode) {
-			this.assertPriceMatchesCountryCatalog({countryCode, priceId, isGift, pricingMode, userId});
+		if (enforcedCountryCode && billing.catalogMode === 'env') {
+			this.assertPriceMatchesCountryCatalog({countryCode: enforcedCountryCode, priceId, isGift, userId});
 		}
 		const user = await this.userRepository.findUnique(userId);
 		if (!user) {
@@ -597,6 +594,12 @@ export class StripeCheckoutService {
 			throw new PremiumPurchaseBlockedError('lifetime');
 		}
 		this.validateUserCanPurchase(user);
+		if (isRecurringSubscription) {
+			const storeEntitlement = await this.storeEntitlementService?.getActiveStoreEntitlement(user.id);
+			if (storeEntitlement) {
+				throw new PremiumPurchaseBlockedError('existing_subscription', {provider: storeEntitlement.provider});
+			}
+		}
 		const customerUser = await this.ensureStripeCustomer(user);
 		const customerId = customerUser.stripeCustomerId;
 		if (!customerId) {
@@ -703,20 +706,25 @@ export class StripeCheckoutService {
 		return normalized && /^[A-Z]{2}$/.test(normalized) ? normalized : null;
 	}
 
+	private resolveEnforcedPricingCountryCode({
+		countryCode,
+		purchaseGeoipCountryCode,
+	}: Pick<CreateCheckoutSessionParams, 'countryCode' | 'purchaseGeoipCountryCode'>): string | null {
+		return this.normalizeCountryCode(purchaseGeoipCountryCode) ?? this.normalizeCountryCode(countryCode);
+	}
+
 	private assertPriceMatchesCountryCatalog({
 		countryCode,
 		priceId,
 		isGift,
-		pricingMode = 'localized',
 		userId,
 	}: {
 		countryCode: string;
 		priceId: string;
 		isGift: boolean;
-		pricingMode?: PricingMode;
 		userId: UserID;
 	}): void {
-		const localizedPrices = this.resolveConfiguredPriceIds(countryCode, pricingMode);
+		const localizedPrices = this.resolveConfiguredPriceIds(countryCode);
 		const allowedPriceIds = new Set(
 			(isGift
 				? [localizedPrices.gift_1_month, localizedPrices.gift_1_year]
@@ -731,7 +739,6 @@ export class StripeCheckoutService {
 					userId,
 					currency: isGift ? localizedPrices.gift_currency : localizedPrices.currency,
 					isGift,
-					pricingMode,
 				},
 				'Checkout price mismatch for country',
 			);
@@ -740,15 +747,11 @@ export class StripeCheckoutService {
 	}
 
 	private requiresLocalizedCardPreapproval(productInfo: ProductInfo): boolean {
-		return (
-			this.productRegistry.isRecurringSubscription(productInfo) &&
-			productInfo.currency !== 'USD' &&
-			productInfo.currency !== 'EUR'
-		);
+		return this.productRegistry.isRecurringSubscription(productInfo) && isLocalizedCurrency(productInfo.currency);
 	}
 
 	private requiresCountryCodeForLocalizedCurrency(currency: Currency): boolean {
-		return currency !== 'USD' && currency !== 'EUR';
+		return isLocalizedCurrency(currency);
 	}
 
 	private async rejectLocalizedCardPreapproval(
@@ -1005,25 +1008,30 @@ export class StripeCheckoutService {
 		if (!user.stripeCustomerId) {
 			throw new StripeNoPurchaseHistoryError();
 		}
+		const portalUser = await this.ensureStripeCustomer(user);
+		const customerId = portalUser.stripeCustomerId;
+		if (!customerId) {
+			throw new StripeNoPurchaseHistoryError();
+		}
 		try {
 			const session = await this.stripe.billingPortal.sessions.create({
-				customer: user.stripeCustomerId,
+				customer: customerId,
 				return_url: `${Config.endpoints.webApp}/premium-callback?status=closed-billing-portal`,
 			});
 			if (!session.url) {
-				Logger.error({userId, customerId: user.stripeCustomerId}, 'Stripe customer portal session missing url');
+				Logger.error({userId, customerId}, 'Stripe customer portal session missing url');
 				throw new StripeError('Stripe customer portal session missing url');
 			}
 			return session.url;
 		} catch (error: unknown) {
-			Logger.error({error, userId, customerId: user.stripeCustomerId}, 'Failed to create customer portal session');
+			Logger.error({error, userId, customerId}, 'Failed to create customer portal session');
 			const message = error instanceof Error ? error.message : 'Failed to create customer portal session';
 			throw new StripeError(message);
 		}
 	}
 
-	async getPriceIds(countryCode?: string, pricingMode: PricingMode = 'localized'): Promise<PriceIdsResponse> {
-		const resolvedPrices = this.resolveConfiguredPriceIds(countryCode, pricingMode);
+	async getPriceIds(countryCode?: string): Promise<PriceIdsResponse> {
+		const resolvedPrices = this.resolveConfiguredPriceIds(countryCode);
 		const [monthlyPrice, yearlyPrice, gift1MonthPrice, gift1YearPrice] = await Promise.all([
 			this.getStripePriceSummary(resolvedPrices.monthly),
 			this.getStripePriceSummary(resolvedPrices.yearly),
@@ -1054,13 +1062,10 @@ export class StripeCheckoutService {
 	private static readonly CUSTOMER_LOCK_TTL_SECONDS = seconds('30 seconds');
 	private static readonly LOCALIZED_CARD_PREAPPROVAL_CONTINUE_LOCK_TTL_SECONDS = seconds('30 seconds');
 	private static readonly LOCALIZED_CARD_PREAPPROVAL_TTL_SECONDS = seconds('1 day');
-	private static readonly PRICE_CACHE_TTL_SECONDS = seconds('1 hour');
 
-	private resolveConfiguredPriceIds(countryCode?: string, pricingMode: PricingMode = 'localized'): ResolvedPriceIds {
-		const recurringCurrencyPreferences =
-			pricingMode === 'base' ? getBaseCurrencyPreferences(countryCode) : getCurrencyPreferences(countryCode);
-		const giftCurrencyPreferences =
-			pricingMode === 'base' ? getBaseGiftCurrencyPreferences(countryCode) : getGiftCurrencyPreferences(countryCode);
+	private resolveConfiguredPriceIds(countryCode?: string): ResolvedPriceIds {
+		const recurringCurrencyPreferences = getCurrencyPreferences(countryCode);
+		const giftCurrencyPreferences = getGiftCurrencyPreferences(countryCode);
 		const recurringPrices = this.resolveRecurringPriceIds(recurringCurrencyPreferences);
 		const giftPrices = this.resolveGiftPriceIds(giftCurrencyPreferences);
 		return {
@@ -1096,162 +1101,36 @@ export class StripeCheckoutService {
 				return resolvedPrices;
 			}
 		}
+		if (Config.instance.selfHosted) {
+			return {gift_1_month: null, gift_1_year: null, gift_currency: null};
+		}
 		throw new StripeError(`Stripe gift price ids missing for supported currencies: ${preferredCurrencies.join(', ')}`);
 	}
 
 	private getConfiguredRecurringPriceIdsForCurrency(
 		currency: Currency,
 	): Pick<ResolvedPriceIds, 'monthly' | 'yearly' | 'currency'> | null {
-		const prices = Config.stripe.prices;
-		if (!prices) {
+		const monthly = this.productRegistry.getRecurringSubscriptionPriceId('monthly', currency);
+		const yearly = this.productRegistry.getRecurringSubscriptionPriceId('yearly', currency);
+		if (!monthly || !yearly) {
 			return null;
 		}
-		switch (currency) {
-			case 'EUR':
-				if (!prices.monthlyEur || !prices.yearlyEur) {
-					return null;
-				}
-				return {
-					monthly: prices.monthlyEur,
-					yearly: prices.yearlyEur,
-					currency,
-				};
-			case 'BRL':
-				if (!prices.monthlyBrl || !prices.yearlyBrl) {
-					return null;
-				}
-				return {
-					monthly: prices.monthlyBrl,
-					yearly: prices.yearlyBrl,
-					currency,
-				};
-			case 'INR':
-				if (!prices.monthlyInr || !prices.yearlyInr) {
-					return null;
-				}
-				return {
-					monthly: prices.monthlyInr,
-					yearly: prices.yearlyInr,
-					currency,
-				};
-			case 'PLN':
-				if (!prices.monthlyPln || !prices.yearlyPln) {
-					return null;
-				}
-				return {
-					monthly: prices.monthlyPln,
-					yearly: prices.yearlyPln,
-					currency,
-				};
-			case 'TRY':
-				if (!prices.monthlyTry || !prices.yearlyTry) {
-					return null;
-				}
-				return {
-					monthly: prices.monthlyTry,
-					yearly: prices.yearlyTry,
-					currency,
-				};
-			case 'USD':
-				if (!prices.monthlyUsd || !prices.yearlyUsd) {
-					return null;
-				}
-				return {
-					monthly: prices.monthlyUsd,
-					yearly: prices.yearlyUsd,
-					currency,
-				};
-			default:
-				return null;
-		}
+		return {monthly, yearly, currency};
 	}
 
 	private getConfiguredGiftPriceIdsForCurrency(
 		currency: Currency,
 	): Pick<ResolvedPriceIds, 'gift_1_month' | 'gift_1_year' | 'gift_currency'> | null {
-		const prices = Config.stripe.prices;
-		if (!prices) {
+		const gift1Month = this.productRegistry.getGiftPriceId('gift_1_month', currency);
+		const gift1Year = this.productRegistry.getGiftPriceId('gift_1_year', currency);
+		if (!gift1Month || !gift1Year) {
 			return null;
 		}
-		switch (currency) {
-			case 'BRL':
-				if (!prices.gift1MonthBrl || !prices.gift1YearBrl) {
-					return null;
-				}
-				return {
-					gift_1_month: prices.gift1MonthBrl,
-					gift_1_year: prices.gift1YearBrl,
-					gift_currency: 'BRL',
-				};
-			case 'INR':
-				if (!prices.gift1MonthInr || !prices.gift1YearInr) {
-					return null;
-				}
-				return {
-					gift_1_month: prices.gift1MonthInr,
-					gift_1_year: prices.gift1YearInr,
-					gift_currency: 'INR',
-				};
-			case 'PLN':
-				if (!prices.gift1MonthPln || !prices.gift1YearPln) {
-					return null;
-				}
-				return {
-					gift_1_month: prices.gift1MonthPln,
-					gift_1_year: prices.gift1YearPln,
-					gift_currency: 'PLN',
-				};
-			case 'TRY':
-				if (!prices.gift1MonthTry || !prices.gift1YearTry) {
-					return null;
-				}
-				return {
-					gift_1_month: prices.gift1MonthTry,
-					gift_1_year: prices.gift1YearTry,
-					gift_currency: 'TRY',
-				};
-			case 'EUR':
-				if (!prices.gift1MonthEur || !prices.gift1YearEur) {
-					return null;
-				}
-				return {
-					gift_1_month: prices.gift1MonthEur,
-					gift_1_year: prices.gift1YearEur,
-					gift_currency: 'EUR',
-				};
-			case 'USD':
-				if (!prices.gift1MonthUsd || !prices.gift1YearUsd) {
-					return null;
-				}
-				return {
-					gift_1_month: prices.gift1MonthUsd,
-					gift_1_year: prices.gift1YearUsd,
-					gift_currency: 'USD',
-				};
-			default:
-				return null;
-		}
+		return {gift_1_month: gift1Month, gift_1_year: gift1Year, gift_currency: currency};
 	}
 
 	private async getStripePriceSummary(priceId: string | null): Promise<StripePriceSummary | null> {
-		if (!priceId || !this.stripe) {
-			return null;
-		}
-		try {
-			return await this.cacheService.getOrSet<StripePriceSummary>(
-				`stripe_price_summary:${priceId}`,
-				async () => {
-					const price = await this.stripe!.prices.retrieve(priceId);
-					return {
-						unitAmountMinor: price.unit_amount ?? null,
-					};
-				},
-				StripeCheckoutService.PRICE_CACHE_TTL_SECONDS,
-			);
-		} catch (error: unknown) {
-			Logger.warn({error, priceId}, 'Failed to retrieve Stripe price summary');
-			return null;
-		}
+		return getCachedStripePriceSummary({stripe: this.stripe, cacheService: this.cacheService, priceId});
 	}
 
 	private assertPaymentMethodCompatibility({
@@ -1272,6 +1151,10 @@ export class StripeCheckoutService {
 		}
 		if (isGift || !this.productRegistry.isRecurringSubscription(productInfo)) {
 			Logger.error({paymentMethod, priceId, userId}, 'Non-card payment method only valid for recurring subscriptions');
+			throw new StripeInvalidProductConfigurationError();
+		}
+		if (getEffectiveBillingConfig().catalogMode === 'operator') {
+			Logger.error({paymentMethod, priceId, userId}, 'Non-card payment methods are unavailable for operator prices');
 			throw new StripeInvalidProductConfigurationError();
 		}
 		if (paymentMethod === 'pix' && productInfo.currency !== 'BRL') {
@@ -1307,7 +1190,8 @@ export class StripeCheckoutService {
 		paymentMethod: CheckoutPaymentMethod;
 		priceId: string;
 	}): Promise<CheckoutSessionPaymentMethodOptions | undefined> {
-		if (productInfo.currency === 'BRL' && checkoutMode === 'payment') {
+		const envCatalog = getEffectiveBillingConfig().catalogMode === 'env';
+		if (envCatalog && productInfo.currency === 'BRL' && checkoutMode === 'payment') {
 			return {
 				pix: {
 					amount_includes_iof: 'always',
@@ -1331,13 +1215,13 @@ export class StripeCheckoutService {
 			};
 		}
 		if (paymentMethod === 'upi') {
-			const mandateAmount = await this.resolveMandateAmount(priceId);
+			const [mandateAmount, branding] = await Promise.all([this.resolveMandateAmount(priceId), getBillingBranding()]);
 			return {
 				upi: {
 					mandate_options: {
 						amount: mandateAmount,
 						amount_type: 'maximum',
-						description: UPI_MANDATE_DESCRIPTION,
+						description: branding.upiMandateDescription,
 					},
 				},
 			};
@@ -1353,7 +1237,48 @@ export class StripeCheckoutService {
 		return Math.ceil(priceSummary.unitAmountMinor * PIX_UPI_MANDATE_HEADROOM_MULTIPLIER);
 	}
 
-	private async ensureStripeCustomer(user: User): Promise<User> {
+	private async clearStaleStripeCustomer(user: User): Promise<User> {
+		if (!Config.instance.selfHosted || !this.stripe || !user.stripeCustomerId) {
+			return user;
+		}
+		const customerId = user.stripeCustomerId;
+		try {
+			const customer = await this.stripe.customers.retrieve(customerId);
+			if (!('deleted' in customer && customer.deleted)) {
+				return user;
+			}
+		} catch (error: unknown) {
+			if (!isStripeResourceMissingError(error)) {
+				Logger.warn({error, userId: user.id, customerId}, 'Failed to verify stored Stripe customer');
+				return user;
+			}
+		}
+		const patch: Partial<UserRow> = {stripe_customer_id: null};
+		if (user.stripeSubscriptionId && (await this.isStripeSubscriptionMissing(user.stripeSubscriptionId))) {
+			patch.stripe_subscription_id = null;
+		}
+		const updatedUser = await this.userRepository.patchUpsert(user.id, patch, user.toRow());
+		Logger.info(
+			{userId: user.id, customerId, clearedFields: Object.keys(patch)},
+			'Cleared Stripe customer that no longer exists for the configured Stripe account',
+		);
+		return updatedUser;
+	}
+
+	private async isStripeSubscriptionMissing(subscriptionId: string): Promise<boolean> {
+		if (!this.stripe) {
+			return false;
+		}
+		try {
+			await this.stripe.subscriptions.retrieve(subscriptionId);
+			return false;
+		} catch (error: unknown) {
+			return isStripeResourceMissingError(error);
+		}
+	}
+
+	private async ensureStripeCustomer(existingUser: User): Promise<User> {
+		const user = await this.clearStaleStripeCustomer(existingUser);
 		if (user.stripeCustomerId) {
 			return user;
 		}

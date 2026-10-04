@@ -1,5 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {requireSudoMode} from '@app/api/auth/services/SudoVerificationService';
+import {Config} from '@app/api/Config';
+import {DefaultUserOnly, LoginRequired} from '@app/api/middleware/AuthMiddleware';
+import {CaptchaMiddleware} from '@app/api/middleware/CaptchaMiddleware';
+import {LocalAuthMiddleware} from '@app/api/middleware/LocalAuthMiddleware';
+import {RateLimitMiddleware} from '@app/api/middleware/RateLimitMiddleware';
+import {OpenAPI} from '@app/api/middleware/ResponseTypeMiddleware';
+import {SudoModeMiddleware} from '@app/api/middleware/SudoModeMiddleware';
+import {RateLimitConfigs} from '@app/api/RateLimitConfig';
+import type {HonoApp} from '@app/api/types/HonoEnv';
+import {Validator} from '@app/api/Validator';
 import {requireClientIp} from '@fluxer/ip_utils/src/ClientIp';
 import {
 	AuthLoginResponse,
@@ -9,15 +20,17 @@ import {
 	AuthTokenWithUserIdResponse,
 	EmailRevertRequest,
 	ForgotPasswordRequest,
+	HandoffCancelRequest,
 	HandoffCodeParam,
 	HandoffCompleteRequest,
 	HandoffInfoResponse,
 	HandoffInitiateResponse,
+	HandoffStatusRequest,
 	HandoffStatusResponse,
 	IpAuthorizationPollQuery,
 	IpAuthorizationPollResponse,
 	LoginRequest,
-	LogoutAuthSessionsRequest,
+	LogoutAuthSessionsWithVerificationRequest,
 	MfaTicketRequest,
 	MfaTotpRequest,
 	RegisterRequest,
@@ -28,7 +41,6 @@ import {
 	SsoStartRequest,
 	SsoStartResponse,
 	SsoStatusResponse,
-	SudoVerificationSchema,
 	UsernameSuggestionsRequest,
 	UsernameSuggestionsResponse,
 	ValidateResetPasswordTokenResponse,
@@ -37,17 +49,6 @@ import {
 	WebAuthnAuthenticationOptionsResponse,
 	WebAuthnMfaRequest,
 } from '@fluxer/schema/src/domains/auth/AuthSchemas';
-import {Config} from '../Config';
-import {DefaultUserOnly, LoginRequiredAllowSuspicious} from '../middleware/AuthMiddleware';
-import {CaptchaMiddleware} from '../middleware/CaptchaMiddleware';
-import {LocalAuthMiddleware} from '../middleware/LocalAuthMiddleware';
-import {RateLimitMiddleware} from '../middleware/RateLimitMiddleware';
-import {OpenAPI} from '../middleware/ResponseTypeMiddleware';
-import {SudoModeMiddleware} from '../middleware/SudoModeMiddleware';
-import {RateLimitConfigs} from '../RateLimitConfig';
-import type {HonoApp} from '../types/HonoEnv';
-import {Validator} from '../Validator';
-import {requireSudoMode} from './services/SudoVerificationService';
 
 export function AuthController(app: HonoApp) {
 	app.get(
@@ -101,15 +102,17 @@ export function AuthController(app: HonoApp) {
 				'Complete the SSO authentication flow with the authorization code from the SSO provider. Returns authentication token and user information.',
 		}),
 		async (ctx) => {
-			const result = await ctx.get('authRequestService').completeSso(ctx.req.valid('json'), ctx.req.raw);
+			const result = await ctx
+				.get('authRequestService')
+				.completeSso(ctx.req.valid('json'), ctx.req.raw, ctx.get('requestCache'));
 			return ctx.json(result);
 		},
 	);
 	app.post(
 		'/auth/register',
 		LocalAuthMiddleware,
-		CaptchaMiddleware,
 		RateLimitMiddleware(RateLimitConfigs.AUTH_REGISTER),
+		CaptchaMiddleware,
 		Validator('json', RegisterRequest),
 		OpenAPI({
 			operationId: 'register_account',
@@ -119,7 +122,7 @@ export function AuthController(app: HonoApp) {
 			security: [],
 			tags: ['Auth'],
 			description:
-				'Create a new user account with email and password. Requires CAPTCHA verification. User account is created but must verify email before logging in.',
+				'Create a new user account with email and password. Requires a solved captcha challenge (X-Captcha-Token). User account is created but must verify email before logging in.',
 		}),
 		async (ctx) => {
 			const result = await ctx.get('authRequestService').register({
@@ -133,8 +136,8 @@ export function AuthController(app: HonoApp) {
 	app.post(
 		'/auth/login',
 		LocalAuthMiddleware,
-		CaptchaMiddleware,
 		RateLimitMiddleware(RateLimitConfigs.AUTH_LOGIN),
+		CaptchaMiddleware,
 		Validator('json', LoginRequest),
 		OpenAPI({
 			operationId: 'login_user',
@@ -144,7 +147,7 @@ export function AuthController(app: HonoApp) {
 			security: [],
 			tags: ['Auth'],
 			description:
-				'Authenticate with email and password. Returns authentication token if credentials are valid and MFA is not required. If MFA is enabled, returns a ticket for MFA verification.',
+				'Authenticate with email and password. Returns authentication token if credentials are valid and MFA is not required. If MFA is enabled, returns a ticket for MFA verification. Requires a solved captcha challenge (X-Captcha-Token).',
 		}),
 		async (ctx) => {
 			const result = await ctx.get('authRequestService').login({
@@ -179,21 +182,19 @@ export function AuthController(app: HonoApp) {
 	app.post(
 		'/auth/logout',
 		RateLimitMiddleware(RateLimitConfigs.AUTH_LOGOUT),
+		LoginRequired,
 		OpenAPI({
 			operationId: 'logout_user',
 			summary: 'Logout account',
 			responseSchema: null,
 			statusCode: 204,
-			security: ['bearerToken', 'sessionToken'],
+			security: ['botToken', 'bearerToken', 'sessionToken'],
 			tags: ['Auth'],
 			description:
-				'Invalidate the current authentication token and end the session. The auth token in the Authorization header will no longer be valid.',
+				'Invalidate the current authentication token and end the session. The auth token in the Authorization header will no longer be valid. A bot token has no session to end, so the call answers 204 and the token stays valid.',
 		}),
 		async (ctx) => {
-			await ctx.get('authRequestService').logout({
-				authorizationHeader: ctx.req.header('Authorization') ?? undefined,
-				authToken: ctx.get('authToken') ?? undefined,
-			});
+			await ctx.get('authRequestService').logout({authToken: ctx.get('authToken')});
 			return ctx.body(null, 204);
 		},
 	);
@@ -221,7 +222,7 @@ export function AuthController(app: HonoApp) {
 		'/auth/verify/resend',
 		LocalAuthMiddleware,
 		RateLimitMiddleware(RateLimitConfigs.AUTH_RESEND_VERIFICATION),
-		LoginRequiredAllowSuspicious,
+		LoginRequired,
 		DefaultUserOnly,
 		OpenAPI({
 			operationId: 'resend_verification_email',
@@ -241,8 +242,8 @@ export function AuthController(app: HonoApp) {
 	app.post(
 		'/auth/forgot',
 		LocalAuthMiddleware,
-		CaptchaMiddleware,
 		RateLimitMiddleware(RateLimitConfigs.AUTH_FORGOT_PASSWORD),
+		CaptchaMiddleware,
 		Validator('json', ForgotPasswordRequest),
 		OpenAPI({
 			operationId: 'forgot_password',
@@ -252,7 +253,7 @@ export function AuthController(app: HonoApp) {
 			security: [],
 			tags: ['Auth'],
 			description:
-				"Initiate password reset process by email. A password reset link will be sent to the user's email address. Requires CAPTCHA verification.",
+				"Initiate password reset process by email. A password reset link will be sent to the user's email address. Requires a solved captcha challenge (X-Captcha-Token).",
 		}),
 		async (ctx) => {
 			await ctx.get('authRequestService').forgotPassword({
@@ -331,7 +332,7 @@ export function AuthController(app: HonoApp) {
 	app.get(
 		'/auth/sessions',
 		RateLimitMiddleware(RateLimitConfigs.AUTH_SESSIONS_GET),
-		LoginRequiredAllowSuspicious,
+		LoginRequired,
 		DefaultUserOnly,
 		OpenAPI({
 			operationId: 'list_auth_sessions',
@@ -344,16 +345,17 @@ export function AuthController(app: HonoApp) {
 		}),
 		async (ctx) => {
 			const userId = ctx.get('user').id;
-			return ctx.json(await ctx.get('authRequestService').getAuthSessions(userId));
+			const currentSessionIdHash = ctx.get('authSession')?.sessionIdHash;
+			return ctx.json(await ctx.get('authRequestService').getAuthSessions(userId, currentSessionIdHash));
 		},
 	);
 	app.post(
 		'/auth/sessions/logout',
 		RateLimitMiddleware(RateLimitConfigs.AUTH_SESSIONS_LOGOUT),
-		LoginRequiredAllowSuspicious,
+		LoginRequired,
 		DefaultUserOnly,
 		SudoModeMiddleware,
-		Validator('json', LogoutAuthSessionsRequest.merge(SudoVerificationSchema)),
+		Validator('json', LogoutAuthSessionsWithVerificationRequest),
 		OpenAPI({
 			operationId: 'logout_all_sessions',
 			summary: 'Logout all sessions',
@@ -447,7 +449,7 @@ export function AuthController(app: HonoApp) {
 				'Retrieve WebAuthn authentication challenge and options for passwordless login with biometrics or security keys.',
 		}),
 		async (ctx) => {
-			return ctx.json(await ctx.get('authRequestService').getWebAuthnAuthenticationOptions());
+			return ctx.json(await ctx.get('authRequestService').getWebAuthnAuthenticationOptions(ctx.req.header('origin')));
 		},
 	);
 	app.post(
@@ -490,7 +492,9 @@ export function AuthController(app: HonoApp) {
 				'Retrieve WebAuthn challenge and options for multi-factor authentication. Requires the MFA ticket from initial login.',
 		}),
 		async (ctx) => {
-			return ctx.json(await ctx.get('authRequestService').getWebAuthnMfaOptions(ctx.req.valid('json')));
+			return ctx.json(
+				await ctx.get('authRequestService').getWebAuthnMfaOptions(ctx.req.valid('json'), ctx.req.header('origin')),
+			);
 		},
 	);
 	app.post(
@@ -551,18 +555,7 @@ export function AuthController(app: HonoApp) {
 				'Start a handoff session to transfer authentication between devices. Returns a handoff code for device linking.',
 		}),
 		async (ctx) => {
-			const clientIp = requireClientIp(ctx.req.raw, {
-				trustClientIpHeader: Config.proxy.trust_client_ip_header,
-				clientIpHeaderName: Config.proxy.client_ip_header,
-			});
-			const clientPlatform = ctx.req.header('x-fluxer-platform')?.trim().toLowerCase() ?? undefined;
-			return ctx.json(
-				await ctx.get('authRequestService').initiateHandoff({
-					userAgent: ctx.req.header('User-Agent'),
-					clientIp,
-					clientPlatform,
-				}),
-			);
+			return ctx.json(await ctx.get('authRequestService').initiateHandoff({request: ctx.req.raw}));
 		},
 	);
 	app.get(
@@ -611,9 +604,9 @@ export function AuthController(app: HonoApp) {
 			});
 			await ctx.get('authRequestService').completeHandoff({
 				data: ctx.req.valid('json'),
-				request: ctx.req.raw,
 				clientIp,
 				authToken: ctx.get('authToken') ?? undefined,
+				approverOrigin: ctx.req.header('origin'),
 			});
 			return ctx.body(null, 204);
 		},
@@ -644,10 +637,39 @@ export function AuthController(app: HonoApp) {
 			return ctx.json(response);
 		},
 	);
+	app.post(
+		'/auth/handoff/:code/status',
+		RateLimitMiddleware(RateLimitConfigs.AUTH_HANDOFF_STATUS),
+		Validator('param', HandoffCodeParam),
+		Validator('json', HandoffStatusRequest),
+		OpenAPI({
+			operationId: 'get_handoff_status_with_secret',
+			summary: 'Get handoff status with secret',
+			responseSchema: HandoffStatusResponse,
+			statusCode: 200,
+			security: [],
+			tags: ['Auth'],
+			description:
+				'Check the status of a handoff session using the poll secret from initiation. Returns the authentication token once the handoff is complete and the presented secret matches.',
+		}),
+		async (ctx) => {
+			const clientIp = requireClientIp(ctx.req.raw, {
+				trustClientIpHeader: Config.proxy.trust_client_ip_header,
+				clientIpHeaderName: Config.proxy.client_ip_header,
+			});
+			const response = await ctx.get('authRequestService').getHandoffStatus({
+				code: ctx.req.valid('param').code,
+				clientIp,
+				pollSecret: ctx.req.valid('json').poll_secret,
+			});
+			return ctx.json(response);
+		},
+	);
 	app.delete(
 		'/auth/handoff/:code',
 		RateLimitMiddleware(RateLimitConfigs.AUTH_HANDOFF_CANCEL),
 		Validator('param', HandoffCodeParam),
+		Validator('json', HandoffCancelRequest),
 		OpenAPI({
 			operationId: 'cancel_handoff',
 			summary: 'Cancel handoff',
@@ -658,7 +680,10 @@ export function AuthController(app: HonoApp) {
 			description: 'Cancel an ongoing handoff session. The handoff code will no longer be valid for authentication.',
 		}),
 		async (ctx) => {
-			await ctx.get('authRequestService').cancelHandoff({code: ctx.req.valid('param').code});
+			await ctx.get('authRequestService').cancelHandoff({
+				code: ctx.req.valid('param').code,
+				pollSecret: ctx.req.valid('json').poll_secret,
+			});
 			return ctx.body(null, 204);
 		},
 	);

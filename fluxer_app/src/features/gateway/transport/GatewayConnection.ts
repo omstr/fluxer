@@ -4,6 +4,7 @@ import GeoIP from '@app/features/app/state/GeoIP';
 import Initialization from '@app/features/app/state/Initialization';
 import RuntimeConfig from '@app/features/app/state/RuntimeConfig';
 import RuntimeCrash from '@app/features/app/state/RuntimeCrash';
+import Channels from '@app/features/channel/state/Channels';
 import FavoriteMemes from '@app/features/expressions/state/FavoriteMemes';
 import {
 	createHandlerRegistry,
@@ -23,9 +24,13 @@ import {
 	GatewayState,
 	type GatewayVoiceStateUpdateParams,
 } from '@app/features/gateway/transport/GatewaySocket';
+import {selectGuildActivationTarget} from '@app/features/gateway/transport/GuildActivationTarget';
 import GuildMatureContentAgree from '@app/features/guild/state/GuildMatureContentAgree';
+import GuildMembers from '@app/features/member/state/GuildMembers';
 import MemberSearch from '@app/features/member/state/MemberSearch';
+import AttachmentUrlRefresher from '@app/features/messaging/state/AttachmentUrlRefresher';
 import Messages from '@app/features/messaging/state/MessagingMessages';
+import Navigation from '@app/features/navigation/state/Navigation';
 import SelectedGuild from '@app/features/navigation/state/SelectedGuild';
 import Permission from '@app/features/permissions/state/Permission';
 import SessionManager from '@app/features/platform/state/AuthSession';
@@ -41,7 +46,7 @@ import LayerManager from '@app/features/ui/state/LayerManager';
 import MediaEngine from '@app/features/voice/engine/MediaEngineFacade';
 import {DEFAULT_API_VERSION, FAVORITES_GUILD_ID} from '@fluxer/constants/src/AppConstants';
 import {GatewayIdentifyFlags} from '@fluxer/constants/src/GatewayConstants';
-import {action, makeAutoObservable, reaction, runInAction} from 'mobx';
+import {action, actionBound, makeAutoObservable, reaction, runInAction} from 'mobx';
 
 const logger = new Logger('GatewayConnection');
 
@@ -55,6 +60,7 @@ interface DesiredSession {
 class GatewayConnection {
 	socket: GatewaySocket | null = null;
 	isConnected: boolean = false;
+	connectionEpoch: number = 0;
 	isConnecting: boolean = false;
 	isReady: boolean = false;
 	sessionId: string | null = null;
@@ -75,6 +81,7 @@ class GatewayConnection {
 	private isFatalCrashInProgress: boolean = false;
 	private connectionInterrupted: boolean = false;
 	private connectionGraceTimer: number | null = null;
+	private previousSessionId: string | null = null;
 
 	constructor() {
 		makeAutoObservable<
@@ -88,28 +95,30 @@ class GatewayConnection {
 			| 'beginConnectionGrace'
 			| 'clearConnectionGrace'
 			| 'connectionGraceTimer'
+			| 'previousSessionId'
 		>(
 			this,
 			{
-				startSession: action.bound,
-				beginConnectionGrace: action.bound,
-				clearConnectionGrace: action.bound,
+				startSession: actionBound,
+				beginConnectionGrace: actionBound,
+				clearConnectionGrace: actionBound,
 				connectionGraceTimer: false,
-				setToken: action.bound,
-				sendInvisiblePresenceForCurrentSession: action.bound,
-				retireCurrentSession: action.bound,
-				logout: action.bound,
-				handleConnectionOpen: action.bound,
-				handleConnectionResumed: action.bound,
-				handleConnectionClosed: action.bound,
-				cleanupSocket: action.bound,
-				handleGatewayDispatch: action.bound,
-				handleFatalGatewaySocketError: action.bound,
-				ensureGuildActiveAndSynced: action.bound,
-				flushPendingGuildSync: action.bound,
-				syncGuildIfNeeded: action.bound,
-				markGuildSynced: action.bound,
-				applyGatewayGeoip: action.bound,
+				previousSessionId: false,
+				setToken: actionBound,
+				sendInvisiblePresenceForCurrentSession: actionBound,
+				retireCurrentSession: actionBound,
+				logout: actionBound,
+				handleGatewayReady: actionBound,
+				handleConnectionResumed: actionBound,
+				handleConnectionClosed: actionBound,
+				cleanupSocket: actionBound,
+				handleGatewayDispatch: actionBound,
+				handleFatalGatewaySocketError: actionBound,
+				ensureGuildActiveAndSynced: actionBound,
+				flushPendingGuildSync: actionBound,
+				syncGuildIfNeeded: actionBound,
+				markGuildSynced: actionBound,
+				applyGatewayGeoip: actionBound,
 			},
 			{autoBind: true},
 		);
@@ -176,11 +185,11 @@ class GatewayConnection {
 		deferUntilModulesLoaded(() => {
 			reaction(
 				() => ({
-					guildId: SelectedGuild.selectedGuildId,
+					guildId: this.activationGuildId,
 					nonce: SelectedGuild.selectionNonce,
 				}),
 				({guildId}) => {
-					if (!guildId || guildId === FAVORITES_GUILD_ID) {
+					if (!guildId) {
 						this.pendingGuildSyncId = null;
 						return;
 					}
@@ -201,8 +210,10 @@ class GatewayConnection {
 	private createHandlerContext(): GatewayHandlerContext {
 		return {
 			socket: this.socket,
-			previousSessionId: null,
-			setPreviousSessionId: (_id: string) => {},
+			previousSessionId: this.previousSessionId,
+			setPreviousSessionId: (id: string) => {
+				this.previousSessionId = id;
+			},
 			setReady: () => {
 				runInAction(() => {
 					this.isReady = true;
@@ -348,6 +359,9 @@ class GatewayConnection {
 				if (!isCurrent()) {
 					return;
 				}
+				if (newState === GatewayState.Connected || previousState === GatewayState.Connected) {
+					this.connectionEpoch += 1;
+				}
 				this.isConnected = newState === GatewayState.Connected;
 				this.isConnecting = newState === GatewayState.Connecting || newState === GatewayState.Reconnecting;
 				if (newState === GatewayState.Connected) {
@@ -374,7 +388,7 @@ class GatewayConnection {
 				const readyData = data as {
 					session_id: string;
 				};
-				this.handleConnectionOpen(readyData.session_id);
+				this.handleGatewayReady(readyData.session_id);
 			}),
 		);
 		socket.on(
@@ -454,8 +468,17 @@ class GatewayConnection {
 		}
 	}
 
+	private get activationGuildId(): string | null {
+		const channelId = Navigation.channelId;
+		const channel = channelId ? Channels.getChannel(channelId) : undefined;
+		return selectGuildActivationTarget({
+			selectedGuildId: SelectedGuild.selectedGuildId,
+			openChannelGuildId: channel?.guildId ?? null,
+		});
+	}
+
 	private flushPendingGuildSync(): void {
-		const guildId = this.pendingGuildSyncId ?? SelectedGuild.selectedGuildId;
+		const guildId = this.pendingGuildSyncId ?? this.activationGuildId;
 		if (!guildId || guildId === FAVORITES_GUILD_ID) {
 			return;
 		}
@@ -581,6 +604,7 @@ class GatewayConnection {
 		Presence.handleSessionInvalidated();
 		Messages.handleSessionInvalidated();
 		FavoriteMemes.reset();
+		AttachmentUrlRefresher.reset();
 		GuildMatureContentAgree.reset();
 		Initialization.reset();
 		MemberSearch.handleLogout();
@@ -597,7 +621,7 @@ class GatewayConnection {
 		this.completedGuildSyncSessions = {};
 	}
 
-	handleConnectionOpen(sessionId: string): void {
+	handleGatewayReady(sessionId: string): void {
 		this.isConnected = true;
 		this.isConnecting = false;
 		this.isReady = true;
@@ -608,6 +632,7 @@ class GatewayConnection {
 		TypingIndicator.reset();
 		QuickSwitcher.recomputeIfOpen();
 		this.flushPendingGuildSync();
+		GuildMembers.handleConnectionResumed();
 	}
 
 	handleConnectionResumed(): void {
@@ -620,6 +645,7 @@ class GatewayConnection {
 		TypingIndicator.reset();
 		QuickSwitcher.recomputeIfOpen();
 		this.flushPendingGuildSync();
+		GuildMembers.handleConnectionResumed();
 	}
 
 	handleConnectionClosed(code: number): void {

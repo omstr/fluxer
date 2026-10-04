@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {openClaimAccountModal} from '@app/features/auth/components/modals/ClaimAccountModal';
 import Authentication from '@app/features/auth/state/Authentication';
 import {User} from '@app/features/user/models/User';
 import type {UserPrivate, User as WireUser} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
-import {action, makeAutoObservable, reaction, runInAction} from 'mobx';
+import {makeAutoObservable, reaction, runInAction} from 'mobx';
 
 const CURRENT_USER_PRIVATE_WIRE_KEYS = [
 	'is_staff',
 	'email',
 	'email_bounced',
+	'account_limited',
 	'mfa_enabled',
-	'phone',
 	'authenticator_types',
 	'verified',
 	'premium_type',
@@ -31,7 +30,6 @@ const CURRENT_USER_PRIVATE_WIRE_KEYS = [
 	'premium_perks_disabled',
 	'password_last_changed_at',
 	'last_voice_activity_sharing_change_at',
-	'required_actions',
 	'nsfw_allowed',
 	'pending_bulk_message_deletion',
 	'has_dismissed_premium_onboarding',
@@ -47,14 +45,12 @@ const CURRENT_USER_PRIVATE_WIRE_KEYS = [
 ] as const;
 
 function isPublicOnlyCurrentUserPayload(user: WireUser): boolean {
-	if (typeof user.mention_flags === 'number') {
-		return false;
-	}
 	return !CURRENT_USER_PRIVATE_WIRE_KEYS.some((key) => key in user);
 }
 
 class Users {
 	users: Record<string, User> = {};
+	userCount = 0;
 
 	constructor() {
 		makeAutoObservable(this, {}, {autoBind: true});
@@ -92,20 +88,20 @@ class Users {
 		return this.usersList;
 	}
 
-	@action
-	handleConnectionOpen(currentUser: UserPrivate): void {
+	handleGatewayReady(currentUser: UserPrivate): void {
 		const userRecord = new User(currentUser);
 		this.users = {
 			[currentUser.id]: userRecord,
 		};
+		this.userCount = 1;
 		if (!userRecord.isClaimed()) {
 			setTimeout(async () => {
+				const {openClaimAccountModal} = await import('@app/features/auth/components/modals/ClaimAccountModal');
 				openClaimAccountModal();
 			}, 1000);
 		}
 	}
 
-	@action
 	handleUserUpdate(
 		user: WireUser,
 		options?: {
@@ -121,7 +117,18 @@ class Users {
 		) {
 			return;
 		}
-		this.users[user.id] = existingUser ? existingUser.withUpdates(user, options) : new User(user);
+		this.storeUser(existingUser, existingUser ? existingUser.withUpdates(user, options) : new User(user));
+	}
+
+	private storeUser(existingUser: User | undefined, nextUser: User): void {
+		if (existingUser) {
+			if (existingUser.equals(nextUser)) {
+				return;
+			}
+		} else {
+			this.userCount += 1;
+		}
+		this.users[nextUser.id] = nextUser;
 	}
 
 	cacheUsers(
@@ -137,14 +144,14 @@ class Users {
 				if (user.id === this.currentUserId && existingUser && isPublicOnlyCurrentUserPayload(user)) {
 					continue;
 				}
-				this.users[user.id] = existingUser ? existingUser.withUpdates(user) : new User(user);
+				this.storeUser(existingUser, existingUser ? existingUser.withUpdates(user) : new User(user));
 			}
 		});
 	}
 
 	subscribe(callback: () => void): () => void {
 		return reaction(
-			() => Object.keys(this.users).length,
+			() => this.userCount,
 			() => callback(),
 			{fireImmediately: true},
 		);

@@ -2,7 +2,7 @@
 
 import type {Channel} from '@app/features/channel/models/Channel';
 import type {Message} from '@app/features/messaging/models/MessagingMessage';
-import {makeAutoObservable, observable} from 'mobx';
+import {makeAutoObservable, observableRef} from 'mobx';
 
 export type MediaViewerItem = Readonly<{
 	src: string;
@@ -32,19 +32,19 @@ class MediaViewer {
 	isOpen: boolean = false;
 	items: ReadonlyArray<MediaViewerItem> = [];
 	currentIndex: number = 0;
-	sessionId: number = 0;
 	channelId?: string = undefined;
 	messageId?: string = undefined;
 	message?: Message = undefined;
 	sourceChannel?: Channel = undefined;
+	allowAttachmentDelete: boolean = false;
 
 	constructor() {
 		makeAutoObservable(
 			this,
 			{
-				items: observable.ref,
-				message: observable.ref,
-				sourceChannel: observable.ref,
+				items: observableRef,
+				message: observableRef,
+				sourceChannel: observableRef,
 			},
 			{autoBind: true},
 		);
@@ -57,15 +57,16 @@ class MediaViewer {
 		messageId?: string,
 		message?: Message,
 		sourceChannel?: Channel | null,
+		allowAttachmentDelete: boolean = false,
 	): void {
 		this.isOpen = true;
-		this.sessionId += 1;
 		this.items = copyMediaViewerItems(items);
 		this.currentIndex = currentIndex;
 		this.channelId = channelId;
 		this.messageId = messageId;
 		this.message = message;
 		this.sourceChannel = sourceChannel ?? undefined;
+		this.allowAttachmentDelete = allowAttachmentDelete;
 	}
 
 	close(): void {
@@ -76,6 +77,7 @@ class MediaViewer {
 		this.messageId = undefined;
 		this.message = undefined;
 		this.sourceChannel = undefined;
+		this.allowAttachmentDelete = false;
 	}
 
 	navigate(index: number): void {

@@ -3,7 +3,7 @@
 import {useMergeRefs} from '@app/features/app/hooks/useMergeRefs';
 import {isKeyboardActivationKey} from '@app/features/input/utils/KeyboardUtils';
 import type {ComponentActionType} from '@app/features/platform/utils/ComponentBus';
-import {ComponentDispatch} from '@app/features/platform/utils/ComponentBus';
+import {ComponentBus} from '@app/features/platform/utils/ComponentBus';
 import * as PopoutCommands from '@app/features/ui/commands/PopoutCommands';
 import {
 	type PopoutAnimationType,
@@ -12,6 +12,7 @@ import {
 	type PopoutReferenceRect,
 	usePopoutKeyContext,
 } from '@app/features/ui/popover';
+import {isPopoutDragClick, type PopoutClickStart} from '@app/features/ui/popover/PopoverDragClickUtils';
 import styles from '@app/features/ui/popover/PopoverPopout.module.css';
 import {schedulePopoutPortalCleanup} from '@app/features/ui/popover/PopoverPortalCleanup';
 import KeyboardMode from '@app/features/ui/state/KeyboardMode';
@@ -27,7 +28,6 @@ import {autorun} from 'mobx';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 
 let currentId = 1;
-const CLICK_DRAG_TOLERANCE_PX = 3;
 const MENU_ITEM_SELECTOR =
 	'[data-roving-focus="true"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]';
 
@@ -40,6 +40,8 @@ interface PopoutProps {
 	tooltip?: string | (() => React.ReactNode);
 	tooltipPosition?: TooltipPosition;
 	tooltipAlign?: 'center' | 'top' | 'bottom' | 'left' | 'right';
+	tooltipDelay?: number;
+	tooltipNudge?: number;
 	zIndexBoost?: number;
 	shouldAutoUpdate?: boolean;
 	freezePosition?: boolean;
@@ -48,7 +50,6 @@ interface PopoutProps {
 	animationType?: PopoutAnimationType;
 	constrainHeight?: boolean;
 	containerClass?: string;
-	stableTextRendering?: boolean;
 	preventInvert?: boolean;
 	hoverDelay?: number;
 	hoverCloseDelay?: number;
@@ -69,12 +70,6 @@ interface OpenPopoutOptions extends Partial<PopoutProps> {
 	onContentMouseLeave?: () => void;
 }
 
-interface ClickStart {
-	x: number;
-	y: number;
-	button: number;
-}
-
 type PopoutOpenMode = 'click' | 'hover';
 
 export const openPopout = (target: HTMLElement, props: OpenPopoutOptions, key: string | number, clickPos = 0) => {
@@ -93,7 +88,6 @@ export const openPopout = (target: HTMLElement, props: OpenPopoutOptions, key: s
 		constrainHeight: props.constrainHeight,
 		clickPos,
 		containerClass: props.containerClass,
-		stableTextRendering: props.stableTextRendering,
 		preventInvert: props.preventInvert,
 		onOpen: props.onOpen,
 		onClose: props.onClose,
@@ -192,7 +186,7 @@ export const Popout = React.forwardRef<HTMLElement, PopoutProps>((props, ref) =>
 	const isContentHoveringRef = useRef(false);
 	const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
 	const closeTimerRef = useRef<NodeJS.Timeout | null>(null);
-	const clickStartRef = useRef<ClickStart | null>(null);
+	const clickStartRef = useRef<PopoutClickStart | null>(null);
 	const openModeRef = useRef<PopoutOpenMode | null>(null);
 	useEffect(() => {
 		if (props.children) {
@@ -375,8 +369,8 @@ export const Popout = React.forwardRef<HTMLElement, PopoutProps>((props, ref) =>
 	useEffect(() => {
 		if (!props.subscribeTo) return;
 		const handler = () => toggle();
-		ComponentDispatch.subscribe(props.subscribeTo, handler);
-		return () => ComponentDispatch.unsubscribe(props.subscribeTo!, handler);
+		ComponentBus.subscribe(props.subscribeTo, handler);
+		return () => ComponentBus.unsubscribe(props.subscribeTo!, handler);
 	}, [props.subscribeTo, toggle]);
 	const childToRender =
 		(props.children as React.ReactNode) || (!props.closeOnChildrenUnmount ? state.lastValidChildren : null);
@@ -456,13 +450,7 @@ export const Popout = React.forwardRef<HTMLElement, PopoutProps>((props, ref) =>
 	const consumeDragClick = (event: React.MouseEvent<HTMLElement>) => {
 		const clickStart = clickStartRef.current;
 		clickStartRef.current = null;
-		if (!clickStart || clickStart.button !== event.button) {
-			return false;
-		}
-		return (
-			Math.abs(event.clientX - clickStart.x) > CLICK_DRAG_TOLERANCE_PX ||
-			Math.abs(event.clientY - clickStart.y) > CLICK_DRAG_TOLERANCE_PX
-		);
+		return isPopoutDragClick(clickStart, event);
 	};
 	const enhancedChild = React.cloneElement(child, {
 		...popoutTriggerProps,
@@ -526,6 +514,8 @@ export const Popout = React.forwardRef<HTMLElement, PopoutProps>((props, ref) =>
 			text={props.tooltip}
 			position={props.tooltipPosition}
 			align={props.tooltipAlign}
+			delay={props.tooltipDelay}
+			nudge={props.tooltipNudge}
 			data-flx="ui.popover.popout.tooltip"
 		>
 			{trigger}

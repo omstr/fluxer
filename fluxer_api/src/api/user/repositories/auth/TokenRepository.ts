@@ -1,29 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {seconds} from 'itty-time';
-import type {
-	PasswordResetToken as PasswordResetTokenBrand,
-	PhoneVerificationToken,
-	UserID,
-} from '../../../BrandedTypes';
-import {createEmailRevertToken, createEmailVerificationToken, createPasswordResetToken} from '../../../BrandedTypes';
-import {BatchBuilder, deleteOneOrMany, fetchMany, fetchOne, upsertOne} from '../../../database/CassandraQueryExecution';
+import type {PasswordResetToken as PasswordResetTokenBrand, UserID} from '@app/api/BrandedTypes';
+import {createEmailRevertToken, createEmailVerificationToken, createPasswordResetToken} from '@app/api/BrandedTypes';
+import {BatchBuilder, deleteOneOrMany, fetchMany, fetchOne, upsertOne} from '@app/api/database/CassandraQueryExecution';
 import type {
 	EmailRevertTokenRow,
 	EmailVerificationTokenRow,
 	PasswordResetTokenRow,
-	PhoneTokenRow,
-} from '../../../database/types/AuthTypes';
-import {EmailRevertToken} from '../../../models/EmailRevertToken';
-import {EmailVerificationToken} from '../../../models/EmailVerificationToken';
-import {PasswordResetToken} from '../../../models/PasswordResetToken';
+} from '@app/api/database/types/AuthTypes';
+import {EmailRevertToken} from '@app/api/models/EmailRevertToken';
+import {EmailVerificationToken} from '@app/api/models/EmailVerificationToken';
+import {PasswordResetToken} from '@app/api/models/PasswordResetToken';
 import {
 	EmailRevertTokens,
 	EmailVerificationTokens,
 	PasswordResetTokens,
 	PasswordResetTokensByUserId,
-	PhoneTokens,
-} from '../../../Tables';
+} from '@app/api/Tables';
+import {seconds} from 'itty-time';
 
 const FETCH_EMAIL_VERIFICATION_TOKEN_CQL = EmailVerificationTokens.selectCql({
 	where: EmailVerificationTokens.where.eq('token_'),
@@ -38,10 +32,6 @@ const FETCH_PASSWORD_RESET_TOKENS_BY_USER_CQL = PasswordResetTokensByUserId.sele
 });
 const FETCH_EMAIL_REVERT_TOKEN_CQL = EmailRevertTokens.selectCql({
 	where: EmailRevertTokens.where.eq('token_'),
-	limit: 1,
-});
-const FETCH_PHONE_TOKEN_CQL = PhoneTokens.selectCql({
-	where: PhoneTokens.where.eq('token_'),
 	limit: 1,
 });
 
@@ -118,7 +108,7 @@ export class TokenRepository {
 	}
 
 	async createEmailRevertToken(tokenData: EmailRevertTokenRow): Promise<EmailRevertToken> {
-		await upsertOne(EmailRevertTokens.insert(tokenData));
+		await upsertOne(EmailRevertTokens.insertWithTtl(tokenData, seconds('24 hours')));
 		return new EmailRevertToken(tokenData);
 	}
 
@@ -128,33 +118,6 @@ export class TokenRepository {
 				where: EmailRevertTokens.where.eq('token_'),
 			}),
 			{token_: createEmailRevertToken(token)},
-		);
-	}
-
-	async createPhoneToken(token: PhoneVerificationToken, phone: string, userId: UserID | null): Promise<void> {
-		const TTL = seconds('15 minutes');
-		await upsertOne(
-			PhoneTokens.insertWithTtl(
-				{
-					token_: token,
-					phone,
-					user_id: userId,
-				},
-				TTL,
-			),
-		);
-	}
-
-	async getPhoneToken(token: PhoneVerificationToken): Promise<PhoneTokenRow | null> {
-		return await fetchOne<PhoneTokenRow>(FETCH_PHONE_TOKEN_CQL, {token_: token});
-	}
-
-	async deletePhoneToken(token: PhoneVerificationToken): Promise<void> {
-		await deleteOneOrMany(
-			PhoneTokens.deleteCql({
-				where: PhoneTokens.where.eq('token_'),
-			}),
-			{token_: token},
 		);
 	}
 }

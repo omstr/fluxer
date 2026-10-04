@@ -43,6 +43,7 @@ function isThemeLibraryTheme(value: unknown): value is ThemeLibraryTheme {
 		typeof value.fileName === 'string' &&
 		typeof value.source === 'string' &&
 		THEME_SOURCES.has(value.source) &&
+		(value.linkedPath === undefined || typeof value.linkedPath === 'string') &&
 		typeof value.createdAt === 'number' &&
 		typeof value.updatedAt === 'number'
 	);
@@ -94,7 +95,7 @@ function getDatabase(): Promise<IDBDatabase> {
 	if (openPromise) {
 		return openPromise;
 	}
-	openPromise = new Promise((resolve, reject) => {
+	const promise = new Promise<IDBDatabase>((resolve, reject) => {
 		if (!browserIndexedDB) {
 			reject(new Error('IndexedDB unavailable'));
 			return;
@@ -126,7 +127,13 @@ function getDatabase(): Promise<IDBDatabase> {
 		request.onerror = () => reject(request.error ?? new Error('Failed to open theme library database'));
 		request.onblocked = () => reject(new Error('Theme library database upgrade is blocked by another window'));
 	});
-	return openPromise;
+	promise.catch(() => {
+		if (openPromise === promise) {
+			openPromise = null;
+		}
+	});
+	openPromise = promise;
+	return promise;
 }
 
 async function withReadonlyDb<T>(
@@ -159,6 +166,31 @@ export async function listThemeLibraryThemes(): Promise<Array<ThemeLibraryTheme>
 export async function saveThemeLibraryTheme(theme: ThemeLibraryTheme): Promise<void> {
 	await withReadwriteDb(THEMES_STORE, (store) => {
 		store.put(theme);
+	});
+}
+
+export async function updateThemeLibraryThemes(
+	select: (theme: ThemeLibraryTheme) => boolean,
+	update: (theme: ThemeLibraryTheme) => ThemeLibraryTheme | null,
+): Promise<{themes: Array<ThemeLibraryTheme>; written: boolean}> {
+	return await withReadwriteDb(THEMES_STORE, (store) => {
+		const result: {themes: Array<ThemeLibraryTheme>; written: boolean} = {themes: [], written: false};
+		const request = store.openCursor();
+		request.onsuccess = () => {
+			const cursor = request.result;
+			if (!cursor) return;
+			const stored: unknown = cursor.value;
+			if (isThemeLibraryTheme(stored) && select(stored)) {
+				const next = update(stored);
+				if (next) {
+					cursor.update(next);
+					result.written = true;
+				}
+				result.themes.push(next ?? stored);
+			}
+			cursor.continue();
+		};
+		return result;
 	});
 }
 

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {isDomainMigrationStorageKey} from '@app/features/app/domain_migration/DomainMigrationCore';
 import {
 	normalizeAppPublicConfig,
 	normalizeInstanceRegistration,
 	type RuntimeConfigSnapshot,
+	runtimeConfigSnapshotsAreSameInstance,
 } from '@app/features/app/state/RuntimeConfig';
 import {getProtectedIndexedDB, getProtectedLocalStorage} from '@app/features/platform/state/ProtectedWebStorage';
 import {Logger} from '@app/features/platform/utils/AppLogger';
@@ -54,6 +56,13 @@ export interface StoredAccount {
 	isValid?: boolean;
 }
 
+export class StoredAccountInstanceMismatchError extends Error {
+	constructor(userId: string) {
+		super(`Stored account ${userId} does not belong to the current instance`);
+		this.name = 'StoredAccountInstanceMismatchError';
+	}
+}
+
 type IdbOpenState = 'idle' | 'opening' | 'open' | 'failed';
 
 const MANAGED_KEY_EXACT: ReadonlySet<string> = new Set(['token', 'userId', 'runtimeConfig', 'AccountManager', 'token']);
@@ -61,7 +70,7 @@ const MANAGED_KEY_PREFIXES: ReadonlyArray<string> = ['mobx', 'mobx-persist', 'pe
 const MANAGED_KEY_PREFIX_PATTERN = new RegExp(`^(?:${MANAGED_KEY_PREFIXES.join('|')})`);
 
 function isManagedKey(key: string): boolean {
-	if (!key) {
+	if (!key || isDomainMigrationStorageKey(key)) {
 		return false;
 	}
 	return MANAGED_KEY_EXACT.has(key) || MANAGED_KEY_PREFIX_PATTERN.test(key);
@@ -188,6 +197,9 @@ class AccountStorage {
 		}
 		const keysToRemove = collectManagedKeys(browserLocalStorage).filter((key) => snapshot[key] === undefined);
 		for (const [key, value] of Object.entries(snapshot)) {
+			if (isDomainMigrationStorageKey(key)) {
+				continue;
+			}
 			try {
 				browserLocalStorage.setItem(key, value);
 			} catch (err) {
@@ -255,9 +267,6 @@ class AccountStorage {
 			gifProvider: instance.gifProvider,
 			gifProviderDisplayName: instance.gifProviderDisplayName,
 			gifAttributionRequired: instance.gifAttributionRequired,
-			captchaProvider: instance.captchaProvider,
-			hcaptchaSiteKey: instance.hcaptchaSiteKey,
-			turnstileSiteKey: instance.turnstileSiteKey,
 			apiCodeVersion: instance.apiCodeVersion,
 			features: {...instance.features},
 			sso: instance.sso,
@@ -396,7 +405,7 @@ class AccountStorage {
 		}
 	}
 
-	async restoreAccountData(userId: string): Promise<StoredAccount | null> {
+	async restoreAccountData(userId: string, expectedInstance: RuntimeConfigSnapshot): Promise<StoredAccount | null> {
 		if (!userId) {
 			return null;
 		}
@@ -406,6 +415,9 @@ class AccountStorage {
 			return null;
 		}
 		const normalized = this.normalizeRecord(record);
+		if (!runtimeConfigSnapshotsAreSameInstance(normalized.instance, expectedInstance)) {
+			throw new StoredAccountInstanceMismatchError(userId);
+		}
 		await this.enqueueStorageSwap(async () => {
 			await this.applyManagedStorageSnapshot(normalized.localStorageData ?? {});
 		});
@@ -435,6 +447,13 @@ class AccountStorage {
 		} catch (err) {
 			logger.error('Failed to fetch stored accounts', err);
 			return Array.from(this.memoryCache.values()).map((r) => this.normalizeRecord(r));
+		}
+	}
+
+	async importAccounts(records: ReadonlyArray<StoredAccount>): Promise<void> {
+		await this.ensureDb();
+		for (const record of records) {
+			await this.putRecord(this.sanitizeRecord(record));
 		}
 	}
 
@@ -482,14 +501,30 @@ class AccountStorage {
 		}
 	}
 
-	async updateAccountValidity(userId: string, isValid: boolean): Promise<void> {
+	async refreshAccountCredentials(userId: string, token: string, userData?: UserData): Promise<void> {
+		await this.ensureDb();
+		if (!userId || !token) {
+			return;
+		}
+		try {
+			const record = await this.getRecord(userId);
+			if (!record) {
+				return;
+			}
+			await this.putRecord({...record, token, userData: userData ?? record.userData, isValid: true});
+		} catch (err) {
+			logger.error(`Failed to refresh credentials for account ${userId}`, err);
+		}
+	}
+
+	async updateAccountValidity(userId: string, isValid: boolean, expectedToken?: string): Promise<void> {
 		await this.ensureDb();
 		if (!userId) {
 			return;
 		}
 		try {
 			const record = await this.getRecord(userId);
-			if (!record) {
+			if (!record || (expectedToken !== undefined && record.token !== expectedToken)) {
 				return;
 			}
 			await this.putRecord({...record, isValid});

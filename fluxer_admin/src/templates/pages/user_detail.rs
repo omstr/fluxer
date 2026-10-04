@@ -22,7 +22,6 @@ use maud::{Markup, html};
 pub const USER_TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
     ("account", "Account"),
-    ("billing", "Billing"),
     ("guilds", "Guilds"),
     ("dm_history", "DM History"),
     ("group_dms", "Group DMs"),
@@ -39,11 +38,22 @@ pub fn user_detail_page(
     auth: &AuthContext,
     user: Option<&AdminUser>,
     user_id: &str,
+    premium_badge_name: Option<&str>,
     is_htmx: bool,
 ) -> Markup {
-    user_detail_with_tab(config, auth, user, user_id, "overview", None, is_htmx)
+    user_detail_with_tab(
+        config,
+        auth,
+        user,
+        user_id,
+        "overview",
+        None,
+        premium_badge_name,
+        is_htmx,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn user_detail_with_tab(
     config: &AdminConfig,
     auth: &AuthContext,
@@ -51,10 +61,13 @@ pub fn user_detail_with_tab(
     user_id: &str,
     active_tab: &str,
     tab_body: Option<Markup>,
+    premium_badge_name: Option<&str>,
     is_htmx: bool,
 ) -> Markup {
     let content = match user {
-        Some(user) => render_user_detail(config, auth, user, active_tab, tab_body),
+        Some(user) => {
+            render_user_detail(config, auth, user, active_tab, tab_body, premium_badge_name)
+        }
         None => not_found_state("User", user_id, None, None),
     };
     let title = user
@@ -80,6 +93,7 @@ fn render_user_detail(
     user: &AdminUser,
     active_tab: &str,
     tab_body: Option<Markup>,
+    premium_badge_name: Option<&str>,
 ) -> Markup {
     let display_name = user
         .global_name
@@ -144,6 +158,7 @@ fn render_user_detail(
                         user.premium_type,
                         user.premium_since.as_deref(),
                         config.self_hosted,
+                        premium_badge_name,
                         false,
                     ))
                 }
@@ -164,21 +179,10 @@ fn render_user_detail(
     }
 }
 
-fn user_tab_visible(config: &AdminConfig, tab_id: &str, admin_acls: &[String]) -> bool {
+fn user_tab_visible(_config: &AdminConfig, tab_id: &str, admin_acls: &[String]) -> bool {
     match tab_id {
         "overview" | "account" | "guilds" | "dm_history" | "group_dms" | "reports"
         | "moderation" => true,
-        "billing" => {
-            !config.self_hosted
-                && acl::has_any_permission(
-                    admin_acls,
-                    &[
-                        acl::BILLING_VIEW,
-                        acl::BILLING_REFUND,
-                        acl::BILLING_MANAGE_SUBSCRIPTION,
-                    ],
-                )
-        }
         "relationships" => acl::has_permission(admin_acls, acl::USER_LIST_RELATIONSHIPS),
         "applications" => acl::has_permission(admin_acls, acl::APPLICATION_LIST_BY_OWNER),
         "archives" => acl::has_any_permission(

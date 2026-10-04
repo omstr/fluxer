@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Accessibility from '@app/features/accessibility/state/Accessibility';
-import Initialization from '@app/features/app/state/Initialization';
+import {isClientBooting} from '@app/features/app/state/ClientReadiness';
 import Authentication from '@app/features/auth/state/Authentication';
-import DeveloperOptions from '@app/features/devtools/state/DeveloperOptions';
-import GatewayConnection from '@app/features/gateway/transport/GatewayConnection';
 import {initializeDesktopRpcBridge} from '@app/features/platform/utils/DesktopRpcBridge';
 import {initializeDesktopTrayBridge} from '@app/features/platform/utils/DesktopTrayBridge';
 import ThemeLibrary from '@app/features/theme/state/ThemeLibrary';
+import {broadcastThemeStudioMessage} from '@app/features/theme_studio/state/ThemeStudioBroadcast';
 import * as ModalCommands from '@app/features/ui/commands/ModalCommands';
 import {getElectronAPI} from '@app/features/ui/utils/NativeUtils';
 import {useEffect} from 'react';
@@ -18,17 +17,15 @@ export function useDesktopElectronBridges(): void {
 		void ThemeLibrary.init();
 		const electronApi = getElectronAPI();
 		if (!electronApi) return;
+		const disposeLinkedFileSync = ThemeLibrary.startLinkedFileSync({
+			onThemesChanged: () => broadcastThemeStudioMessage({type: 'themeLibrary', revision: ThemeLibrary.revision}),
+		});
 		const unsubZoomIn = electronApi.onZoomIn?.(() => void Accessibility.adjustZoom(1));
 		const unsubZoomOut = electronApi.onZoomOut?.(() => void Accessibility.adjustZoom(-1));
 		const unsubZoomReset = electronApi.onZoomReset?.(() => Accessibility.updateSettings({zoomLevel: 1.0}));
 		const unsubOpenSettings = electronApi.onOpenSettings?.(() => {
 			if (!Authentication.isAuthenticated) return;
-			if (
-				!DeveloperOptions.bypassSplashScreen &&
-				(GatewayConnection.isConnectionInterrupted || !Initialization.canNavigateToProtectedRoutes)
-			) {
-				return;
-			}
+			if (isClientBooting()) return;
 			void import('@app/features/user/components/modals/UserSettingsModal').then(({UserSettingsModal}) => {
 				ModalCommands.push(
 					ModalCommands.modal(() => (
@@ -46,6 +43,7 @@ export function useDesktopElectronBridges(): void {
 			unsubOpenSettings?.();
 			disposeTrayBridge?.();
 			disposeRpcBridge?.();
+			disposeLinkedFileSync();
 		};
 	}, []);
 }

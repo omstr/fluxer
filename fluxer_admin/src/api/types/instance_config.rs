@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::{InstanceBillingResponse, InstanceBillingUpdateRequest};
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InstanceConfigResponse {
     pub sso: SsoConfigResponse,
@@ -18,14 +20,24 @@ pub struct InstanceConfigResponse {
     pub integrations: InstanceIntegrationsResponse,
     #[serde(default)]
     pub media: InstanceMediaResponse,
+    #[serde(default)]
+    pub push_relay: PushRelayConfigResponse,
+    #[serde(default)]
+    pub domain_migration: DomainMigrationConfigResponse,
+    #[serde(default)]
+    pub plutonium_page: PlutoniumPageConfigResponse,
+    #[serde(default)]
+    pub captcha: CaptchaConfigResponse,
+    #[serde(default)]
+    pub experiment_delivery: ExperimentDeliveryConfigResponse,
+    #[serde(default)]
+    pub billing: InstanceBillingResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InstancePolicyResponse {
     #[serde(default)]
     pub single_community_enabled: bool,
-    #[serde(default)]
-    pub single_community_locked: bool,
     pub single_community_guild_id: Option<String>,
     #[serde(default)]
     pub direct_messages_disabled: bool,
@@ -33,6 +45,8 @@ pub struct InstancePolicyResponse {
     pub direct_messages_locked: bool,
     #[serde(default)]
     pub premium_mode: PremiumMode,
+    #[serde(default = "default_guild_create_access")]
+    pub guild_create_access: bool,
     #[serde(default)]
     pub services: InstanceServicesOverrides,
     #[serde(default)]
@@ -41,15 +55,19 @@ pub struct InstancePolicyResponse {
     pub services_available: InstanceServicesAvailable,
 }
 
+fn default_guild_create_access() -> bool {
+    true
+}
+
 impl Default for InstancePolicyResponse {
     fn default() -> Self {
         Self {
             single_community_enabled: false,
-            single_community_locked: false,
             single_community_guild_id: None,
             direct_messages_disabled: false,
             direct_messages_locked: false,
             premium_mode: PremiumMode::Everyone,
+            guild_create_access: default_guild_create_access(),
             services: InstanceServicesOverrides::default(),
             services_resolved: InstanceServicesResolved::default(),
             services_available: InstanceServicesAvailable::default(),
@@ -91,8 +109,6 @@ pub struct InstanceIntegrationsResponse {
     #[serde(default)]
     pub youtube: InstanceYoutubeIntegrationResponse,
     #[serde(default)]
-    pub captcha: InstanceCaptchaIntegrationResponse,
-    #[serde(default)]
     pub email: InstanceEmailIntegrationResponse,
     #[serde(default)]
     pub bluesky: InstanceBlueskyIntegrationResponse,
@@ -111,21 +127,6 @@ pub struct InstanceYoutubeIntegrationResponse {
     pub api_key_set: bool,
     #[serde(default)]
     pub effective_available: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct InstanceCaptchaIntegrationResponse {
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub effective_provider: String,
-    pub hcaptcha_site_key: Option<String>,
-    #[serde(default)]
-    pub hcaptcha_secret_key_set: bool,
-    pub turnstile_site_key: Option<String>,
-    #[serde(default)]
-    pub turnstile_secret_key_set: bool,
-    #[serde(default)]
-    pub effective_enabled: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -300,6 +301,11 @@ pub struct AppBrandingConfigResponse {
     pub wordmark_url: Option<String>,
     pub favicon_url: Option<String>,
     pub theme_color: Option<String>,
+    pub status_page_url: Option<String>,
+    pub status_page_incident_history_url: Option<String>,
+    #[serde(default = "default_premium_product_name")]
+    pub premium_product_name: String,
+    pub premium_info_url: Option<String>,
 }
 
 impl Default for AppBrandingConfigResponse {
@@ -312,12 +318,20 @@ impl Default for AppBrandingConfigResponse {
             wordmark_url: None,
             favicon_url: None,
             theme_color: None,
+            status_page_url: None,
+            status_page_incident_history_url: None,
+            premium_product_name: default_premium_product_name(),
+            premium_info_url: None,
         }
     }
 }
 
 fn default_product_name() -> String {
     "Fluxer".to_owned()
+}
+
+fn default_premium_product_name() -> String {
+    "Premium".to_owned()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -416,6 +430,178 @@ impl VoiceE2eeScope {
     }
 }
 
+pub const EXPERIMENT_MAX_TARGETED_USERS: usize = 1_000;
+pub const DOMAIN_MIGRATION_DEFAULT_SALT: &str = "domain-migration-v1";
+pub const PLUTONIUM_PAGE_DEFAULT_SALT: &str = "plutonium-page-v1";
+pub const CAPTCHA_COST_RANGE: std::ops::RangeInclusive<u32> = 1_000..=20_000;
+pub const CAPTCHA_MAX_COUNTER_RANGE: std::ops::RangeInclusive<u32> = 100..=20_000;
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PushRelayConfigResponse {
+    pub relay_consent_accepted: bool,
+    pub relay_consent_accepted_at: Option<String>,
+    pub relay_consent_accepted_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct PushRelayConfigUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_consent_accepted: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DomainMigrationConfigResponse {
+    pub enabled: bool,
+    pub config_version: u64,
+    pub rollout_basis_points: u32,
+    pub rollout_salt: String,
+    pub included_user_ids: Vec<String>,
+    pub included_guild_ids: Vec<String>,
+    pub include_premium_users: bool,
+    pub excluded_user_ids: Vec<String>,
+    pub anonymous_rollout_basis_points: u32,
+    pub standalone_forwarding: bool,
+}
+
+impl Default for DomainMigrationConfigResponse {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            config_version: 0,
+            rollout_basis_points: 0,
+            rollout_salt: DOMAIN_MIGRATION_DEFAULT_SALT.to_owned(),
+            included_user_ids: Vec::new(),
+            included_guild_ids: Vec::new(),
+            include_premium_users: false,
+            excluded_user_ids: Vec::new(),
+            anonymous_rollout_basis_points: 0,
+            standalone_forwarding: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DomainMigrationConfigUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout_basis_points: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout_salt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_user_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_guild_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_premium_users: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_user_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anonymous_rollout_basis_points: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub standalone_forwarding: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PlutoniumPageConfigResponse {
+    pub enabled: bool,
+    pub config_version: u64,
+    pub rollout_basis_points: u32,
+    pub rollout_salt: String,
+    pub included_user_ids: Vec<String>,
+    pub included_guild_ids: Vec<String>,
+    pub include_premium_users: bool,
+    pub excluded_user_ids: Vec<String>,
+}
+
+impl Default for PlutoniumPageConfigResponse {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            config_version: 0,
+            rollout_basis_points: 0,
+            rollout_salt: PLUTONIUM_PAGE_DEFAULT_SALT.to_owned(),
+            included_user_ids: Vec::new(),
+            included_guild_ids: Vec::new(),
+            include_premium_users: false,
+            excluded_user_ids: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct PlutoniumPageConfigUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout_basis_points: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout_salt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_user_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_guild_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_premium_users: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_user_ids: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CaptchaConfigResponse {
+    pub enabled: bool,
+    pub cost: u32,
+    pub max_counter: u32,
+}
+
+impl Default for CaptchaConfigResponse {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cost: 5_000,
+            max_counter: 1_000,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CaptchaConfigUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_counter: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ExperimentDeliveryConfigResponse {
+    pub poll_interval_seconds: u64,
+    pub poll_jitter_percent: u32,
+}
+
+impl Default for ExperimentDeliveryConfigResponse {
+    fn default() -> Self {
+        Self {
+            poll_interval_seconds: 300,
+            poll_jitter_percent: 15,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ExperimentDeliveryConfigUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_interval_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_jitter_percent: Option<u32>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InstanceRegistrationResponse {
     pub mode: RegistrationMode,
@@ -505,6 +691,18 @@ pub struct InstanceConfigUpdateRequest {
     pub integrations: Option<InstanceIntegrationsUpdateRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<InstanceMediaUpdateRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub push_relay: Option<PushRelayConfigUpdateRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_migration: Option<DomainMigrationConfigUpdateRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plutonium_page: Option<PlutoniumPageConfigUpdateRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captcha: Option<CaptchaConfigUpdateRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experiment_delivery: Option<ExperimentDeliveryConfigUpdateRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing: Option<InstanceBillingUpdateRequest>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -515,6 +713,8 @@ pub struct InstancePolicyUpdateRequest {
     pub single_community_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direct_messages_disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_create_access: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_mode: Option<PremiumMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -538,8 +738,6 @@ pub struct InstanceIntegrationsUpdateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub youtube: Option<InstanceYoutubeIntegrationUpdateRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub captcha: Option<InstanceCaptchaIntegrationUpdateRequest>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<InstanceEmailIntegrationUpdateRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bluesky: Option<InstanceBlueskyIntegrationUpdateRequest>,
@@ -555,20 +753,6 @@ pub struct InstanceGifIntegrationUpdateRequest {
 pub struct InstanceYoutubeIntegrationUpdateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct InstanceCaptchaIntegrationUpdateRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hcaptcha_site_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hcaptcha_secret_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub turnstile_site_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub turnstile_secret_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -697,6 +881,14 @@ pub struct AppBrandingConfigUpdateRequest {
     pub favicon_url: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_color: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_page_url: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_page_incident_history_url: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub premium_product_name: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub premium_info_url: Option<Option<String>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -795,12 +987,116 @@ pub struct CreateRegistrationUrlResponse {
     pub url: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct RegistrationUrlActionRequest {
-    pub id: String,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::generated::types as generated_types;
+    use serde_json::json;
 
-#[derive(Clone, Debug, Serialize)]
-pub struct PendingRegistrationActionRequest {
-    pub user_id: String,
+    #[test]
+    fn default_instance_config_sections_match_the_published_contract() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../openapi-admin.json"))
+                .expect("admin schema");
+        let domain_migration = serde_json::from_value::<DomainMigrationConfigResponse>(json!({}))
+            .expect("default domain migration config");
+        let plutonium_page = serde_json::from_value::<PlutoniumPageConfigResponse>(json!({}))
+            .expect("default plutonium page config");
+        let captcha = serde_json::from_value::<CaptchaConfigResponse>(json!({}))
+            .expect("default captcha config");
+        let delivery = serde_json::from_value::<ExperimentDeliveryConfigResponse>(json!({}))
+            .expect("default delivery config");
+        let domain_migration =
+            serde_json::to_value(domain_migration).expect("serializable domain migration config");
+        let plutonium_page =
+            serde_json::to_value(plutonium_page).expect("serializable plutonium page config");
+        let captcha = serde_json::to_value(captcha).expect("serializable captcha config");
+        let delivery = serde_json::to_value(delivery).expect("serializable delivery config");
+        let generated_domain_migration: generated_types::DomainMigrationConfigResponse =
+            serde_json::from_value(domain_migration.clone())
+                .expect("generated domain migration config contract");
+        let generated_plutonium_page: generated_types::PlutoniumPageConfigResponse =
+            serde_json::from_value(plutonium_page.clone())
+                .expect("generated plutonium page config contract");
+        let generated_captcha: generated_types::CaptchaConfigResponse =
+            serde_json::from_value(captcha.clone()).expect("generated captcha config contract");
+        let generated_delivery: generated_types::ExperimentDeliveryConfigResponse =
+            serde_json::from_value(delivery.clone()).expect("generated delivery config contract");
+        assert_eq!(
+            serde_json::to_value(generated_domain_migration)
+                .expect("serializable generated domain migration config"),
+            domain_migration
+        );
+        assert_eq!(
+            serde_json::to_value(generated_plutonium_page)
+                .expect("serializable generated plutonium page config"),
+            plutonium_page
+        );
+        assert_eq!(
+            serde_json::to_value(generated_captcha).expect("serializable generated captcha config"),
+            captcha
+        );
+        assert_eq!(
+            serde_json::to_value(generated_delivery)
+                .expect("serializable generated delivery config"),
+            delivery
+        );
+        for (name, value) in [
+            ("DomainMigrationConfigResponse", domain_migration),
+            ("PlutoniumPageConfigResponse", plutonium_page),
+            ("CaptchaConfigResponse", captcha),
+            ("ExperimentDeliveryConfigResponse", delivery),
+        ] {
+            for (field, value) in value.as_object().expect("config object") {
+                assert_eq!(
+                    value, &schema["components"]["schemas"][name]["properties"][field]["default"],
+                    "{name}.{field}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn domain_migration_update_preserves_empty_lists_and_omitted_fields() {
+        let update = DomainMigrationConfigUpdateRequest {
+            included_user_ids: Some(Vec::new()),
+            excluded_user_ids: Some(Vec::new()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(update).expect("serializable update");
+        serde_json::from_value::<generated_types::DomainMigrationConfigUpdateRequest>(
+            value.clone(),
+        )
+        .expect("generated update contract");
+        assert_eq!(
+            value,
+            json!({"included_user_ids": [], "excluded_user_ids": []})
+        );
+        assert_eq!(
+            serde_json::to_value(DomainMigrationConfigUpdateRequest::default())
+                .expect("serializable update"),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn plutonium_page_update_preserves_empty_lists_and_omitted_fields() {
+        let update = PlutoniumPageConfigUpdateRequest {
+            included_user_ids: Some(Vec::new()),
+            excluded_user_ids: Some(Vec::new()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(update).expect("serializable update");
+        serde_json::from_value::<generated_types::PlutoniumPageConfigUpdateRequest>(value.clone())
+            .expect("generated update contract");
+        assert_eq!(
+            value,
+            json!({"included_user_ids": [], "excluded_user_ids": []})
+        );
+        assert_eq!(
+            serde_json::to_value(PlutoniumPageConfigUpdateRequest::default())
+                .expect("serializable update"),
+            json!({})
+        );
+    }
 }

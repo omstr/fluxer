@@ -13,6 +13,7 @@ import DeveloperMode from '@app/features/devtools/state/DeveloperMode';
 import Emoji from '@app/features/emoji/state/Emoji';
 import type {FlatEmoji} from '@app/features/emoji/types/EmojiTypes';
 import {ExpressionPickerSheet} from '@app/features/expressions/components/modals/ExpressionPickerSheet';
+import {buildCustomEmojiURL} from '@app/features/expressions/utils/CustomEmojiImageUrl';
 import {getEmojiURL} from '@app/features/expressions/utils/EmojiUtils';
 import {getSkinTonedSurrogate} from '@app/features/expressions/utils/SkinToneUtils';
 import Presence from '@app/features/presence/state/Presence';
@@ -24,7 +25,7 @@ import * as UserSettingsCommands from '@app/features/user/commands/UserSettingsC
 import styles from '@app/features/user/components/modals/CustomStatusBottomSheet.module.css';
 import {type CustomStatus, normalizeCustomStatus} from '@app/features/user/state/CustomStatus';
 import Users from '@app/features/user/state/Users';
-import * as AvatarUtils from '@app/features/user/utils/AvatarUtils';
+import {handleAccountLimitedError} from '@app/features/user/utils/AccountLimitUtils';
 import {msg} from '@lingui/core/macro';
 import {Trans, useLingui} from '@lingui/react/macro';
 import {SmileyIcon, XIcon} from '@phosphor-icons/react';
@@ -159,6 +160,8 @@ export const CustomStatusBottomSheet = observer(({isOpen, onClose}: CustomStatus
 			});
 			await UserSettingsCommands.update({customStatus: statusToSave});
 			onClose();
+		} catch (error) {
+			if (!handleAccountLimitedError(error)) throw error;
 		} finally {
 			setIsSaving(false);
 		}
@@ -170,7 +173,7 @@ export const CustomStatusBottomSheet = observer(({isOpen, onClose}: CustomStatus
 			if (emoji) {
 				return (
 					<img
-						src={AvatarUtils.getEmojiURL({
+						src={buildCustomEmojiURL({
 							id: draftStatus.emojiId,
 							animated: Boolean(emoji.animated) && shouldAnimateEmojiPreview,
 						})}

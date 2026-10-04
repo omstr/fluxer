@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {ComponentDispatch} from '@app/features/platform/utils/ComponentBus';
+import {ComponentBus} from '@app/features/platform/utils/ComponentBus';
+import * as PlutoniumPageCommands from '@app/features/premium/commands/PlutoniumPageCommands';
 import * as PremiumCommands from '@app/features/premium/commands/PremiumCommands';
+import PlutoniumPageRollout from '@app/features/premium/state/PlutoniumPageRollout';
 import {
 	consumeCompletedPremiumCheckoutReturnIntent,
 	getCurrentPremiumActive,
@@ -47,13 +49,17 @@ export const PremiumCheckoutReturnWatcher = observer(() => {
 	useEffect(() => {
 		if (!showPremiumFeatures) return;
 		if (!isPremium || !consumeCompletedPremiumCheckoutReturnIntent()) return;
+		if (PlutoniumPageRollout.enabled) {
+			PlutoniumPageCommands.openPlutoniumPage();
+			return;
+		}
 		ModalCommands.popAll();
 		ModalCommands.push(
 			modal(() => (
 				<UserSettingsModal initialTab="plutonium" data-flx="premium.checkout-return-watcher.user-settings-modal" />
 			)),
 		);
-		ComponentDispatch.safeDispatch('USER_SETTINGS_TAB_SELECT', {tab: 'plutonium'});
+		ComponentBus.dispatchOrBuffer('USER_SETTINGS_TAB_SELECT', {tab: 'plutonium'});
 	}, [isPremium, currentUserId, showPremiumFeatures]);
 	return null;
 });

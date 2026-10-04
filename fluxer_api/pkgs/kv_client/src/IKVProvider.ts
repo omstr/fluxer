@@ -28,6 +28,11 @@ export interface IKVSubscription {
 	removeAllListeners(event?: 'message' | 'error'): void;
 }
 
+export interface KVPurgeBatchResult {
+	entries: Array<string>;
+	tokensConsumed: number;
+}
+
 export interface KVRateLimitResult {
 	allowed: boolean;
 	limit: number;
@@ -69,6 +74,8 @@ export interface IKVProvider {
 	rpush(key: string, ...values: Array<string>): Promise<number>;
 	lpop(key: string, count?: number): Promise<Array<string>>;
 	llen(key: string): Promise<number>;
+	lrange(key: string, start: number, stop: number): Promise<Array<string>>;
+	ltrim(key: string, start: number, stop: number): Promise<void>;
 	hset(key: string, field: string, value: string): Promise<number>;
 	hdel(key: string, ...fields: Array<string>): Promise<number>;
 	hget(key: string, field: string): Promise<string | null>;
@@ -88,7 +95,8 @@ export interface IKVProvider {
 		refillIntervalMs: number,
 	): Promise<number>;
 	scheduleBulkDeletion(queueKey: string, secondaryKey: string, score: number, value: string): Promise<void>;
-	removeBulkDeletion(queueKey: string, secondaryKey: string): Promise<boolean>;
+	claimBulkDeletion(queueKey: string, member: string, maxScore: number, leaseScore: number): Promise<boolean>;
+	removeBulkDeletion(queueKey: string, secondaryKey: string, member?: string): Promise<boolean>;
 	scan(pattern: string, count: number): Promise<Array<string>>;
 	dequeuePurgeBatch(
 		queueKey: string,
@@ -97,11 +105,9 @@ export interface IKVProvider {
 		maxTokens: number,
 		refillRate: number,
 		refillIntervalMs: number,
-	): Promise<{
-		urls: Array<string>;
-		tokensConsumed: number;
-	}>;
+	): Promise<KVPurgeBatchResult>;
 	pipeline(): IKVPipeline;
 	multi(): IKVPipeline;
+	isClustered(): boolean;
 	health(): Promise<boolean>;
 }

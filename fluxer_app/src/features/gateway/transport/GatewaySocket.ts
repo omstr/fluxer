@@ -2,6 +2,7 @@
 
 import GeoIP from '@app/features/app/state/GeoIP';
 import Authentication from '@app/features/auth/state/Authentication';
+import {takeFastConnect} from '@app/features/gateway/transport/FastConnect';
 import {
 	type CompressionType,
 	GatewayCompression,
@@ -9,11 +10,23 @@ import {
 } from '@app/features/gateway/transport/GatewayCompression';
 import GatewayConnection from '@app/features/gateway/transport/GatewayConnection';
 import {
+	DISPATCH_FLUSH_DELAY_MS,
+	DISPATCH_IDLE_RETRY_TIMEOUT_MS,
+	DISPATCH_IDLE_TIMEOUT_MS,
+	isCriticalGatewayDispatch,
+	selectGatewayDispatchFlushMode,
+	shouldRetryIdleWait,
+	shouldSkipIdleWait,
+} from '@app/features/gateway/transport/GatewayDispatchScheduling';
+import {
 	formatGatewayReadyTimings,
 	type GatewayTimings,
 	type RpcTimings,
 } from '@app/features/gateway/transport/GatewayTimingsFormatter';
-import AppStorage, {PRESERVED_RESET_STORAGE_KEYS} from '@app/features/platform/state/PersistentStorage';
+import AppStorage, {
+	PRESERVED_RESET_STORAGE_KEY_PREFIXES,
+	PRESERVED_RESET_STORAGE_KEYS,
+} from '@app/features/platform/state/PersistentStorage';
 import {Logger, LogLevel} from '@app/features/platform/utils/AppLogger';
 import {ExponentialBackoff} from '@app/features/platform/utils/RetryScheduler';
 import LayerManager from '@app/features/ui/state/LayerManager';
@@ -32,6 +45,7 @@ const GATEWAY_TIMEOUTS = {
 	ResumeWindow: 180000,
 	MinReconnect: 1000,
 	MaxReconnect: 60000,
+	ReconnectSpread: 2000,
 	Hello: 20000,
 } as const;
 export const GatewayState = {
@@ -180,6 +194,8 @@ export class GatewaySocket extends EventEmitter<GatewaySocketEvents> {
 	private shouldReconnectImmediately = false;
 	private deferredEmitQueue: Array<() => void> = [];
 	private deferredEmitTimeoutId: number | null = null;
+	private deferredEmitIdleId: number | null = null;
+	private criticalWorkScheduled = false;
 	private payloadDecompressor: GatewayCompression | null = null;
 	private compressionFallbackInProgress = false;
 
@@ -200,15 +216,77 @@ export class GatewaySocket extends EventEmitter<GatewaySocketEvents> {
 		this.deferredEmitQueue.push(() => {
 			(this.emit as (event: K, ...args: GatewaySocketEventArgs<K>) => boolean)(event, ...args);
 		});
-		if (this.deferredEmitTimeoutId != null) return;
+		const dispatchType = event === 'dispatch' ? (args[0] as string) : null;
+		this.scheduleDeferredFlush(dispatchType);
+	}
+
+	private scheduleDeferredFlush(dispatchType: string | null): void {
+		if (isCriticalGatewayDispatch(dispatchType)) {
+			this.criticalWorkScheduled = true;
+		}
+		if (selectGatewayDispatchFlushMode(dispatchType) === 'immediate') {
+			this.clearDeferredFlushWork();
+			this.flushDeferredEmits();
+			return;
+		}
+		if (this.hasDeferredFlushWork()) return;
 		this.deferredEmitTimeoutId = window.setTimeout(() => {
 			this.deferredEmitTimeoutId = null;
-			const queue = this.deferredEmitQueue;
-			this.deferredEmitQueue = [];
-			for (const emitFn of queue) {
-				emitFn();
+			if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+				this.flushDeferredEmits();
+				return;
 			}
-		}, 0);
+			this.queueDeferredIdleFlush();
+		}, DISPATCH_FLUSH_DELAY_MS);
+	}
+
+	private queueDeferredIdleFlush(): void {
+		if (shouldSkipIdleWait(this.criticalWorkScheduled, typeof window.requestIdleCallback === 'function')) {
+			this.flushDeferredEmits();
+			return;
+		}
+		this.deferredEmitIdleId = window.requestIdleCallback(
+			(deadline) => {
+				this.deferredEmitIdleId = null;
+				if (!shouldRetryIdleWait(deadline.didTimeout, deadline.timeRemaining())) {
+					this.flushDeferredEmits();
+					return;
+				}
+				this.deferredEmitIdleId = window.requestIdleCallback(
+					() => {
+						this.deferredEmitIdleId = null;
+						this.flushDeferredEmits();
+					},
+					{timeout: DISPATCH_IDLE_RETRY_TIMEOUT_MS},
+				);
+			},
+			{timeout: DISPATCH_IDLE_TIMEOUT_MS},
+		);
+	}
+
+	private hasDeferredFlushWork(): boolean {
+		return this.deferredEmitTimeoutId != null || this.deferredEmitIdleId != null;
+	}
+
+	private clearDeferredFlushWork(): void {
+		if (this.deferredEmitTimeoutId != null) {
+			clearTimeout(this.deferredEmitTimeoutId);
+			this.deferredEmitTimeoutId = null;
+		}
+		if (this.deferredEmitIdleId != null && typeof window.cancelIdleCallback === 'function') {
+			window.cancelIdleCallback(this.deferredEmitIdleId);
+		}
+		this.deferredEmitIdleId = null;
+	}
+
+	private flushDeferredEmits(): void {
+		this.clearDeferredFlushWork();
+		this.criticalWorkScheduled = false;
+		const queue = this.deferredEmitQueue;
+		this.deferredEmitQueue = [];
+		for (const emitFn of queue) {
+			emitFn();
+		}
 	}
 
 	connect(): void {
@@ -564,9 +642,10 @@ export class GatewaySocket extends EventEmitter<GatewaySocketEvents> {
 		this.teardownSocket();
 		this.buildGatewayUrl()
 			.then((url) => {
+				const adopted = takeFastConnect(url);
 				this.log.debug(`Opening WebSocket connection to ${url}`);
 				try {
-					this.socket = new WebSocket(url);
+					this.socket = adopted ? adopted.ws : new WebSocket(url);
 					const compression: CompressionType = this.options.compression ?? 'zstd-stream';
 					if (compression !== 'none') {
 						this.socket.binaryType = 'arraybuffer';
@@ -583,6 +662,17 @@ export class GatewaySocket extends EventEmitter<GatewaySocketEvents> {
 					this.socket.addEventListener('error', this.handleSocketError);
 					this.startHelloTimeout();
 					this.emitDeferred('connecting');
+					if (adopted) {
+						this.log.info(
+							`Adopted fast connect socket opened ${Date.now() - adopted.state.startedAt}ms ago with ${adopted.state.messages.length} buffered message(s)`,
+						);
+						if (adopted.state.open || this.socket.readyState === WebSocket.OPEN) {
+							this.handleSocketOpen(new Event('open'));
+						}
+						for (const message of adopted.state.messages) {
+							void this.handleSocketMessage(message);
+						}
+					}
 				} catch (error) {
 					this.log.error('Failed to create WebSocket', error);
 					this.handleConnectionFailure();
@@ -1028,7 +1118,7 @@ export class GatewaySocket extends EventEmitter<GatewaySocketEvents> {
 		}
 		const allowImmediate = options.allowImmediate ?? true;
 		const wasImmediate = allowImmediate && this.shouldReconnectImmediately;
-		const delay = wasImmediate ? 0 : this.nextReconnectDelay();
+		const delay = wasImmediate ? this.reconnectSpread() : this.nextReconnectDelay();
 		this.shouldReconnectImmediately = false;
 		this.log.info(`Scheduling reconnect in ${delay}ms${wasImmediate ? ' (immediate)' : ''}`);
 		this.reconnectTimeoutId = window.setTimeout(() => {
@@ -1041,12 +1131,16 @@ export class GatewaySocket extends EventEmitter<GatewaySocketEvents> {
 		}, delay);
 	}
 
+	private reconnectSpread(): number {
+		return Math.floor(Math.random() * GATEWAY_TIMEOUTS.ReconnectSpread);
+	}
+
 	private nextReconnectDelay(): number {
 		const now = Date.now();
 		const elapsed = now - this.lastReconnectAt;
 		if (elapsed < GATEWAY_TIMEOUTS.MinReconnect) {
 			this.log.debug(`Last reconnect ${elapsed}ms ago, enforcing minimum delay (${GATEWAY_TIMEOUTS.MinReconnect}ms)`);
-			return GATEWAY_TIMEOUTS.MinReconnect;
+			return GATEWAY_TIMEOUTS.MinReconnect + this.reconnectSpread();
 		}
 		this.lastReconnectAt = now;
 		const delay = this.reconnectBackoff.next();
@@ -1179,7 +1273,7 @@ export class GatewaySocket extends EventEmitter<GatewaySocketEvents> {
 	private handleAuthFailure(): void {
 		this.log.error('Authentication failed: clearing client state and logging out');
 		this.updateState(GatewayState.Disconnected);
-		AppStorage.clearExcept(PRESERVED_RESET_STORAGE_KEYS);
+		AppStorage.clearExcept(PRESERVED_RESET_STORAGE_KEYS, PRESERVED_RESET_STORAGE_KEY_PREFIXES);
 		LayerManager.closeAll();
 		GatewayConnection.logout();
 		Authentication.handleConnectionClosed({code: 4004});

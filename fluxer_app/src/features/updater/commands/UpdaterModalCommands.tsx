@@ -3,13 +3,13 @@
 import {ConfirmModal} from '@app/features/app/components/dialogs/ConfirmModal';
 import {DESKTOP_DOWNLOAD_URL, PRODUCT_NAME} from '@app/features/app/config/I18nDisplayConstants';
 import {CLOSE_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
-import type {UpdaterDownloadOption} from '@app/features/platform/types/Electron';
+import type {UpdaterDownloadFormat, UpdaterDownloadOption} from '@app/features/platform/types/Electron';
 import * as ModalCommands from '@app/features/ui/commands/ModalCommands';
 import {modal} from '@app/features/ui/commands/ModalCommands';
 import {Combobox} from '@app/features/ui/components/form/FormCombobox';
-import {openExternalUrl} from '@app/features/ui/utils/NativeUtils';
+import {isCanaryDesktop, openExternalUrl} from '@app/features/ui/utils/NativeUtils';
 import styles from '@app/features/updater/commands/UpdaterModalCommands.module.css';
-import {i18n} from '@lingui/core';
+import {i18n, type MessageDescriptor} from '@lingui/core';
 import {msg} from '@lingui/core/macro';
 import {useMemo, useState} from 'react';
 
@@ -76,6 +76,10 @@ const SYSTEM_MANAGED_UPDATE_BODY_DESCRIPTOR = msg({
 	message: 'This install is managed by your system. Update {productName} from your software center or package manager.',
 	comment: 'Desktop updater modal body for managed package builds such as Flatpak. productName is the app name.',
 });
+const OPEN_SOFTWARE_CENTER_DESCRIPTOR = msg({
+	message: 'Open software center',
+	comment: 'Button label that opens the software center via appstream protocol.',
+});
 const OPEN_DESKTOP_DOWNLOADS_DESCRIPTOR = msg({
 	message: 'Open desktop downloads',
 	comment: 'Button label that opens the Fluxer desktop downloads page in a browser.',
@@ -84,16 +88,16 @@ const DESKTOP_UPDATE_READY_DESCRIPTOR = msg({
 	message: 'Desktop update ready',
 	comment: 'Modal title shown when a desktop app update has finished downloading.',
 });
-const DESKTOP_VERSION_HAS_BEEN_DOWNLOADED_DESCRIPTOR = msg({
+export const DESKTOP_VERSION_HAS_BEEN_DOWNLOADED_DESCRIPTOR = msg({
 	message: 'Desktop version {version} has been downloaded. Restart {productName} to finish installing.',
 	comment:
 		'Desktop updater modal body. The version placeholder is the downloaded app version; productName is the app name.',
 });
-const THE_DESKTOP_UPDATE_HAS_BEEN_DOWNLOADED_DESCRIPTOR = msg({
+export const THE_DESKTOP_UPDATE_HAS_BEEN_DOWNLOADED_DESCRIPTOR = msg({
 	message: 'The desktop update has been downloaded. Restart {productName} to finish installing.',
 	comment: 'Desktop updater modal body when the downloaded version is unknown. productName is the app name.',
 });
-const RESTART_FLUXER_DESCRIPTOR = msg({
+export const RESTART_FLUXER_DESCRIPTOR = msg({
 	message: 'Restart {productName}',
 	comment: 'Button label that restarts the app to apply a desktop update. productName is the app name.',
 });
@@ -153,6 +157,27 @@ const PACKAGE_HELP_DESCRIPTOR = msg({
 	message: 'The downloaded file is saved to your computer. Install it with your normal package manager.',
 	comment: 'Help text below the Linux package format selector in the desktop updater modal.',
 });
+const DEB_PACKAGE_FORMAT_DESCRIPTOR = msg({
+	message: 'DEB package',
+	comment:
+		'Option in the Linux package format dropdown of the desktop updater modal. Keep the format token "DEB" verbatim and translate only the word "package".',
+});
+const RPM_PACKAGE_FORMAT_DESCRIPTOR = msg({
+	message: 'RPM package',
+	comment:
+		'Option in the Linux package format dropdown of the desktop updater modal. Keep the format token "RPM" verbatim and translate only the word "package".',
+});
+const TAR_GZ_ARCHIVE_FORMAT_DESCRIPTOR = msg({
+	message: 'tar.gz archive',
+	comment:
+		'Option in the Linux package format dropdown of the desktop updater modal. Keep the format token "tar.gz" verbatim and translate only the word "archive".',
+});
+
+const DOWNLOAD_FORMAT_LABEL_DESCRIPTORS: Partial<Record<UpdaterDownloadFormat, MessageDescriptor>> = {
+	deb: DEB_PACKAGE_FORMAT_DESCRIPTOR,
+	rpm: RPM_PACKAGE_FORMAT_DESCRIPTOR,
+	tar_gz: TAR_GZ_ARCHIVE_FORMAT_DESCRIPTOR,
+};
 
 const UPDATE_AVAILABLE_KEY = 'updater-available';
 const UP_TO_DATE_KEY = 'updater-up-to-date';
@@ -194,10 +219,13 @@ function ManualUpdateAvailableModal({currentVersion, version, options, onDownloa
 	);
 	const selectOptions = useMemo(
 		() =>
-			options.map((option) => ({
-				value: option.format,
-				label: option.label,
-			})),
+			options.map((option) => {
+				const descriptor = DOWNLOAD_FORMAT_LABEL_DESCRIPTORS[option.format];
+				return {
+					value: option.format,
+					label: descriptor ? i18n._(descriptor) : option.label,
+				};
+			}),
 		[options],
 	);
 	const selectedOption = options.find((option) => option.format === selectedFormat) ?? options[0];
@@ -291,7 +319,15 @@ export function pushUnsupportedUpdateModal(
 					<ConfirmModal
 						title={i18n._(SYSTEM_MANAGED_INSTALL_DESCRIPTOR)}
 						description={i18n._(SYSTEM_MANAGED_UPDATE_BODY_DESCRIPTOR, {productName: PRODUCT_NAME})}
+						primaryText={i18n._(OPEN_SOFTWARE_CENTER_DESCRIPTOR)}
 						secondaryText={i18n._(CLOSE_DESCRIPTOR)}
+						onPrimary={() => {
+							const appstreamUrl = isCanaryDesktop()
+								? 'appstream://app.fluxer.FluxerCanary'
+								: 'appstream://app.fluxer.Fluxer';
+
+							void openExternalUrl(appstreamUrl);
+						}}
 						data-flx="updater.updater-modal-commands.push-unsupported-update-modal.confirm-modal"
 					/>
 				);

@@ -12,7 +12,7 @@ import Authentication from '@app/features/auth/state/Authentication';
 import * as PrivateChannelCommands from '@app/features/channel/commands/PrivateChannelCommands';
 import {GifIndicator} from '@app/features/channel/components/embeds/media/GifIndicator';
 import Channels from '@app/features/channel/state/Channels';
-import {EmojiInfoBottomSheet} from '@app/features/emoji/components/bottomsheets/EmojiInfoBottomSheet';
+import {ExpressionInfoBottomSheet} from '@app/features/expressions/components/bottomsheets/ExpressionInfoBottomSheet';
 import {
 	BLOCKED_USER_DM_WARNING_DESCRIPTOR,
 	OPEN_DM_DESCRIPTOR,
@@ -79,7 +79,7 @@ import {hasActiveDirectCallWithUser} from '@app/features/voice/utils/PrivateCall
 import {ME} from '@fluxer/constants/src/AppConstants';
 import {Permissions} from '@fluxer/constants/src/ChannelConstants';
 import {
-	MEDIA_PROXY_AVATAR_SIZE_PROFILE,
+	MEDIA_PROXY_AVATAR_SIZE_DEFAULT,
 	MEDIA_PROXY_PROFILE_BANNER_SIZE_MODAL,
 } from '@fluxer/constants/src/MediaProxyAssetSizes';
 import {PublicUserFlags, RelationshipTypes} from '@fluxer/constants/src/UserConstants';
@@ -282,7 +282,7 @@ const UserProfileMobileSheetContent: React.FC<UserProfileMobileSheetContentProps
 		);
 		const shouldAutoplayProfileAnimations = useAutoplayExpandedProfileAnimations();
 		const {avatarUrl, hoverAvatarUrl} = useMemo(
-			() => ProfileDisplayUtils.getProfileAvatarUrls(profileContext, undefined, MEDIA_PROXY_AVATAR_SIZE_PROFILE),
+			() => ProfileDisplayUtils.getProfileAvatarUrls(profileContext, undefined, MEDIA_PROXY_AVATAR_SIZE_DEFAULT),
 			[profileContext],
 		);
 		const {bannerUrl: staticBannerUrl, hoverBannerUrl} = useMemo(
@@ -343,7 +343,7 @@ const UserProfileMobileSheetContent: React.FC<UserProfileMobileSheetContentProps
 			);
 		};
 		const handleSendFriendRequest = () => {
-			RelationshipCommands.sendFriendRequest(user.id);
+			void RelationshipActionUtils.sendFriendRequest(i18n, user.id);
 		};
 		const handleAcceptFriendRequest = () => {
 			RelationshipActionUtils.showAcceptFriendRequestConfirmation(i18n, user);
@@ -709,7 +709,11 @@ const UserProfileMobileSheetContent: React.FC<UserProfileMobileSheetContentProps
 																className={styles.actionLabel}
 																data-flx="user.user-profile-mobile-sheet.user-profile-mobile-sheet-content.action-label"
 															>
-																{isBlocked ? i18n._(OPEN_DM_DESCRIPTOR) : <Trans>Message</Trans>}
+																{isBlocked ? (
+																	i18n._(OPEN_DM_DESCRIPTOR)
+																) : (
+																	<Trans context="message-action">Message</Trans>
+																)}
 															</span>
 														</button>
 													)}
@@ -946,11 +950,12 @@ const UserProfileMobileSheetContent: React.FC<UserProfileMobileSheetContentProps
 					guildMember={guildMember}
 					data-flx="user.user-profile-mobile-sheet.user-profile-mobile-sheet-content.user-profile-actions-sheet"
 				/>
-				<EmojiInfoBottomSheet
+				<ExpressionInfoBottomSheet
+					kind="emoji"
 					isOpen={emojiInfoOpen}
 					onClose={() => setEmojiInfoOpen(false)}
 					emoji={selectedEmoji}
-					data-flx="user.user-profile-mobile-sheet.user-profile-mobile-sheet-content.emoji-info-bottom-sheet"
+					data-flx="user.user-profile-mobile-sheet.user-profile-mobile-sheet-content.expression-info-bottom-sheet"
 				/>
 				{mutualSheetView != null && (
 					<MutualItemsSheet

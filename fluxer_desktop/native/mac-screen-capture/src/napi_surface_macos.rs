@@ -960,15 +960,14 @@ fn retain_native_frame_sink_handle(
         ));
     }
 
-    let handle = unsafe {
-        NativeScreenFrameSinkHandle::retain_from_raw(data.cast::<NativeScreenFrameSinkHandle>())
-    }
-    .ok_or_else(|| {
-        napi::Error::new(
-            Status::InvalidArg,
-            "ScreenCapture.setFrameSinkHandle received an invalid native frame sink handle",
-        )
-    })?;
+    let handle = unsafe { data.cast::<NativeScreenFrameSinkHandle>().as_ref() }
+        .and_then(NativeScreenFrameSinkHandle::retain_ref)
+        .ok_or_else(|| {
+            napi::Error::new(
+                Status::InvalidArg,
+                "ScreenCapture.setFrameSinkHandle received an invalid native frame sink handle",
+            )
+        })?;
 
     Ok(Arc::new(handle))
 }
@@ -980,7 +979,7 @@ fn try_enqueue_native_cv_pixel_buffer(
     height: u32,
     sample_buffer: &CMSampleBuffer,
 ) -> EnqueueOutcome {
-    if sink.handle().enqueue_mac_cv_pixel_buffer.is_none() {
+    if !sink.supports_mac_cv_pixel_buffer() {
         return EnqueueOutcome::Rejected;
     }
     let retained =
@@ -2009,7 +2008,7 @@ mod dispatch_queue_tests {
     }
 
     #[test]
-    fn audio_frame_payload_into_input_carries_slot_and_metadata() {
+    fn audio_frame_payload_into_input_keeps_slot_and_metadata() {
         use crate::audio_pool::MacAudioFramePool;
         let pool = MacAudioFramePool::new(2, 64).expect("pool");
         let mut slot = pool.try_acquire().expect("slot");
@@ -2115,7 +2114,7 @@ mod dispatch_queue_tests {
     }
 
     #[test]
-    fn build_capture_config_carries_audio_settings() {
+    fn build_capture_config_includes_audio_settings() {
         let cfg = super::build_capture_config(
             30,
             true,
@@ -2130,7 +2129,7 @@ mod dispatch_queue_tests {
     }
 
     #[test]
-    fn start_options_carry_cursor_color_and_rect_intent() {
+    fn start_options_include_cursor_color_and_rect_intent() {
         let options = super::normalize_start_options(Some(super::ScreenCaptureStartOptions {
             show_cursor_clicks: Some(true),
             capture_rect: Some(super::ScreenCaptureRect {

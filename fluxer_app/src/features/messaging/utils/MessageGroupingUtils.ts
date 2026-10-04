@@ -48,6 +48,9 @@ export function isNewMessageGroup(
 	if (currentMessage.type === MessageTypes.REPLY) {
 		return true;
 	}
+	if (currentMessage.isCrosspostCopy) {
+		return true;
+	}
 	const currentIsDisplaySystem =
 		currentMessage.type !== MessageTypes.DEFAULT && currentMessage.type !== MessageTypes.REPLY;
 	const prevIsDisplaySystem = prevMessage.type !== MessageTypes.DEFAULT && prevMessage.type !== MessageTypes.REPLY;
@@ -197,18 +200,22 @@ export function createChannelStream(props: {
 			}
 		}
 		let shouldShowUnreadDividerBefore = false;
+		let shouldOpenCollapsedGroupWithUnreadDivider = false;
 		if (oldestUnreadMessageId === message.id && unreadTimestamp != null) {
 			if (lastItem?.type === ChannelStreamType.DIVIDER) {
 				lastItem.unreadId = message.id;
+			} else if (collapsedGroupItem !== null) {
+				shouldOpenCollapsedGroupWithUnreadDivider = true;
 			} else {
 				shouldShowUnreadDividerBefore = true;
-				if (collapsedGroupItem !== null) {
-					collapsedGroupItem.hasUnread = true;
-				}
 			}
 			unreadTimestamp = null;
 		} else if (unreadTimestamp != null && extractTimestamp(message.id) > unreadTimestamp) {
-			shouldShowUnreadDividerBefore = true;
+			if (collapsedGroupItem !== null) {
+				shouldOpenCollapsedGroupWithUnreadDivider = true;
+			} else {
+				shouldShowUnreadDividerBefore = true;
+			}
 			unreadTimestamp = null;
 		}
 		let prevMessageForGrouping: Message | undefined;
@@ -234,15 +241,20 @@ export function createChannelStream(props: {
 		if (groupId === message.id) {
 			lastMessageInGroup = message;
 		}
-		const {jumpSequenceId, jumpFlash, jumpTargetId} = messages;
-		if (jumpFlash && message.id === jumpTargetId && jumpSequenceId != null) {
-			messageItem.flashKey = jumpSequenceId;
+		const {jumpTicket, jumpHighlight, jumpDestinationId} = messages;
+		if (jumpHighlight && message.id === jumpDestinationId && jumpTicket != null) {
+			messageItem.flashKey = jumpTicket;
 		}
-		if (messages.jumpTargetId === message.id) {
+		if (messages.jumpDestinationId === message.id) {
 			messageItem.jumpTarget = true;
 		}
 		if (collapsedGroupItem !== null) {
-			(collapsedGroupItem.content as Array<ChannelStreamItem>).push(messageItem);
+			const collapsedContentItems = collapsedGroupItem.content as Array<ChannelStreamItem>;
+			if (shouldOpenCollapsedGroupWithUnreadDivider) {
+				collapsedContentItems.push({type: ChannelStreamType.DIVIDER, content: '', unreadId: message.id});
+				collapsedGroupItem.hasUnread = true;
+			}
+			collapsedContentItems.push(messageItem);
 			if (messageItem.jumpTarget) {
 				collapsedGroupItem.hasJumpTarget = true;
 			}

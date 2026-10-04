@@ -3,7 +3,7 @@
 import {Routes} from '@app/app/Routes';
 import {CHANNEL_TEXTAREA_SELECTOR} from '@app/features/app/keybindings/utils/EditableElement';
 import {useLocation} from '@app/features/platform/components/router/RouterReact';
-import {ComponentDispatch} from '@app/features/platform/utils/ComponentBus';
+import {ComponentBus} from '@app/features/platform/utils/ComponentBus';
 import FocusRingManager from '@app/features/ui/focus_ring/FocusRingManager';
 import KeyboardMode from '@app/features/ui/state/KeyboardMode';
 import {
@@ -11,7 +11,7 @@ import {
 	recordPointerActivationFocusTarget,
 } from '@app/features/ui/utils/PointerActivationFocus';
 import {observer} from 'mobx-react-lite';
-import {useEffect, useMemo} from 'react';
+import {useEffect, useLayoutEffect, useMemo} from 'react';
 
 const FOCUS_TRAPPING_OVERLAY_SELECTOR = [
 	'[role="dialog"]',
@@ -52,7 +52,7 @@ export const KeyboardModeListener = observer(() => {
 	useEffect(() => {
 		let lastWindowFocusTime = document.hasFocus() ? 0 : -Infinity;
 		const REFOCUS_THRESHOLD_MS = 100;
-		const handleWindowFocus = () => {
+		const handleWindowFocused = () => {
 			lastWindowFocusTime = performance.now();
 		};
 		const handleKeyDown = (event: KeyboardEvent) => {
@@ -61,7 +61,7 @@ export const KeyboardModeListener = observer(() => {
 					const composer = document.querySelector<HTMLTextAreaElement>(CHANNEL_TEXTAREA_SELECTOR);
 					if (canRedirectTabToComposer(composer)) {
 						event.preventDefault();
-						ComponentDispatch.dispatch('FOCUS_TEXTAREA', {enterKeyboardMode: true});
+						ComponentBus.dispatch('FOCUS_TEXTAREA', {enterKeyboardMode: true});
 						return;
 					}
 				}
@@ -75,18 +75,18 @@ export const KeyboardModeListener = observer(() => {
 				KeyboardMode.exitKeyboardMode();
 			}
 		};
-		window.addEventListener('focus', handleWindowFocus);
+		window.addEventListener('focus', handleWindowFocused);
 		window.addEventListener('keydown', handleKeyDown, true);
 		window.addEventListener('mousedown', handlePointer, true);
 		window.addEventListener('pointerdown', handlePointer, true);
 		return () => {
-			window.removeEventListener('focus', handleWindowFocus);
+			window.removeEventListener('focus', handleWindowFocused);
 			window.removeEventListener('keydown', handleKeyDown, true);
 			window.removeEventListener('mousedown', handlePointer, true);
 			window.removeEventListener('pointerdown', handlePointer, true);
 		};
 	}, [isAuthRoute]);
-	useEffect(() => {
+	useLayoutEffect(() => {
 		FocusRingManager.setRingsEnabled(keyboardModeEnabled);
 	}, [keyboardModeEnabled]);
 	useEffect(() => {

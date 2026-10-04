@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type {ChannelID, GuildID, MessageID, RoleID, UserID} from '@app/api/BrandedTypes';
+import type {GatewayDispatchEvent} from '@app/api/constants/Gateway';
+import type {ChannelResponse} from '@fluxer/schema/src/domains/channel/ChannelSchemas';
 import type {GuildMemberResponse} from '@fluxer/schema/src/domains/guild/GuildMemberSchemas';
 import type {GuildResponse} from '@fluxer/schema/src/domains/guild/GuildResponseSchemas';
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
-import type {ChannelID, GuildID, MessageID, RoleID, UserID} from '../BrandedTypes';
-import type {GatewayDispatchEvent} from '../constants/Gateway';
 
 interface VoiceState {
 	user_id: string;
@@ -22,6 +23,19 @@ export interface CallData {
 	ringing: Array<string>;
 	recipients: Array<string>;
 	voice_states: Array<VoiceState>;
+}
+
+export interface CallCaller {
+	id: string;
+	name: string;
+	avatar: string | null;
+}
+
+export function callCallerRpcParams(caller: CallCaller | undefined): Record<string, unknown> {
+	if (!caller) {
+		return {};
+	}
+	return {caller_id: caller.id, caller_name: caller.name, caller_avatar: caller.avatar};
 }
 
 export interface GatewayGuildMemoryStatsEntry {
@@ -49,6 +63,9 @@ export interface GatewayNodeStatsEntry {
 	node_id: string;
 	status: string;
 	sessions: number;
+	session_resumes_total: number | null;
+	websocket_dispatches_total: number | null;
+	websocket_dispatch_drops_total: number | null;
 	guilds: number;
 	presences: number;
 	calls: number;
@@ -61,6 +78,9 @@ export interface GatewayNodeStatsEntry {
 export interface GatewayNodeStats {
 	status: string;
 	sessions: number;
+	session_resumes_total: number;
+	websocket_dispatches_total: number;
+	websocket_dispatch_drops_total: number;
 	guilds: number;
 	presences: number;
 	calls: number;
@@ -88,23 +108,17 @@ export interface GatewayVoiceStateCounts {
 	servers: Array<GatewayVoiceStateServerCount>;
 }
 
-export interface GatewayActiveVoiceRoom {
-	guildId?: GuildID;
-	channelId: ChannelID;
-	voiceStateCount: number;
-}
-
-export interface GatewayActiveVoiceRooms {
-	rooms: Array<GatewayActiveVoiceRoom>;
-	nodeCount: number;
-}
-
 export interface GatewayVoiceStateEntry {
 	connectionId: string;
 	userId: string;
 	channelId: string;
 	regionId?: string;
 	serverId?: string;
+}
+
+export interface GuildChannelAuthContext {
+	guild: GuildResponse;
+	parentChannel: ChannelResponse | null;
 }
 
 export interface GatewayChannelMention {
@@ -156,8 +170,6 @@ export abstract class IGatewayService {
 	abstract getGuildMemoryStats(limit: number): Promise<GatewayGuildMemoryStats>;
 
 	abstract getVoiceStateCounts(): Promise<GatewayVoiceStateCounts>;
-
-	abstract getActiveVoiceRooms(): Promise<GatewayActiveVoiceRooms>;
 
 	abstract getUsersToMentionByRoles(params: {
 		guildId: GuildID;
@@ -251,6 +263,12 @@ export abstract class IGatewayService {
 		skipMembershipCheck?: boolean;
 	}): Promise<GuildResponse>;
 
+	abstract getGuildAuthContext(params: {
+		guildId: GuildID;
+		userId: UserID;
+		channelId?: ChannelID;
+	}): Promise<GuildChannelAuthContext>;
+
 	abstract getGuildMember(params: {guildId: GuildID; userId: UserID}): Promise<{
 		success: boolean;
 		memberData?: GuildMemberResponse;
@@ -284,10 +302,6 @@ export abstract class IGatewayService {
 	abstract getCurrentActivities(userId: UserID): Promise<Array<UserActivity>>;
 
 	abstract clearCurrentActivities(userId: UserID): Promise<void>;
-
-	abstract invalidatePushBadgeCount(params: {userId: UserID}): Promise<void>;
-
-	abstract invalidatePushSubscriptions(params: {userId: UserID}): Promise<void>;
 
 	abstract clearPushChannelNotifications(params: {
 		userId: UserID;
@@ -333,17 +347,6 @@ export abstract class IGatewayService {
 		tokenNonce?: string;
 	}): Promise<{
 		success: boolean;
-		error?: string;
-	}>;
-
-	abstract repairVoiceStateFromCache(params: {
-		guildId?: GuildID;
-		channelId: ChannelID;
-		userId: UserID;
-		connectionId: string;
-	}): Promise<{
-		success: boolean;
-		repaired?: boolean;
 		error?: string;
 	}>;
 
@@ -396,11 +399,12 @@ export abstract class IGatewayService {
 		region: string,
 		ringing: Array<string>,
 		recipients: Array<string>,
+		caller?: CallCaller,
 	): Promise<CallData>;
 
 	abstract updateCallRegion(channelId: ChannelID, region: string | null): Promise<boolean>;
 
-	abstract ringCallRecipients(channelId: ChannelID, recipients: Array<string>): Promise<boolean>;
+	abstract ringCallRecipients(channelId: ChannelID, recipients: Array<string>, caller?: CallCaller): Promise<boolean>;
 
 	abstract stopRingingCallRecipients(channelId: ChannelID, recipients: Array<string>): Promise<boolean>;
 

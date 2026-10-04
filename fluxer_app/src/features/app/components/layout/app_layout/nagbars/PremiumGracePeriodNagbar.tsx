@@ -4,15 +4,16 @@ import {showPremiumActionErrorModal} from '@app/features/app/components/dialogs/
 import {Nagbar} from '@app/features/app/components/layout/Nagbar';
 import {NagbarButton} from '@app/features/app/components/layout/NagbarButton';
 import {NagbarContent} from '@app/features/app/components/layout/NagbarContent';
+import {NAGBAR_TONES, NagbarToneKind} from '@app/features/app/components/layout/NagbarTones';
 import {PREMIUM_PRODUCT_NAME} from '@app/features/app/config/I18nDisplayConstants';
 import {Logger} from '@app/features/platform/utils/AppLogger';
 import * as PremiumCommands from '@app/features/premium/commands/PremiumCommands';
+import {getPremiumGraceEndDate} from '@app/features/premium/utils/PremiumGrace';
 import {MANAGE_SUBSCRIPTION_DESCRIPTOR} from '@app/features/premium/utils/PremiumMessageDescriptors';
 import * as NagbarCommands from '@app/features/ui/commands/NagbarCommands';
 import {openExternalUrl} from '@app/features/ui/utils/NativeUtils';
 import Users from '@app/features/user/state/Users';
 import * as LocaleUtils from '@app/features/user/utils/LocaleUtils';
-import {MS_PER_DAY} from '@fluxer/date_utils/src/DateConstants';
 import {getFormattedLongDate} from '@fluxer/date_utils/src/DateFormatting';
 import {msg} from '@lingui/core/macro';
 import {useLingui} from '@lingui/react/macro';
@@ -61,17 +62,15 @@ export const PremiumGracePeriodNagbar = observer(({isMobile}: {isMobile: boolean
 	const handleDismiss = () => {
 		NagbarCommands.dismissNagbar('premiumGracePeriodDismissed');
 	};
-	if (!user?.premiumUntil || user?.premiumWillCancel) return null;
-	const expiryDate = new Date(user.premiumUntil);
-	const gracePeriodMs = 3 * MS_PER_DAY;
-	const graceEndDate = new Date(expiryDate.getTime() + gracePeriodMs);
+	if (!user?.premiumUntil) return null;
+	const graceEndDate = getPremiumGraceEndDate(new Date(user.premiumUntil), user.premiumGraceEndsAt);
 	const locale = LocaleUtils.getCurrentLocale();
 	const formattedGraceDate = getFormattedLongDate(graceEndDate, locale);
 	return (
 		<Nagbar
 			isMobile={isMobile}
-			backgroundColor="#f97316"
-			textColor="#ffffff"
+			backgroundColor={NAGBAR_TONES[NagbarToneKind.PREMIUM].backgroundColor}
+			textColor={NAGBAR_TONES[NagbarToneKind.PREMIUM].textColor}
 			dismissible
 			onDismiss={handleDismiss}
 			data-flx="app.app-layout.nagbars.premium-grace-period-nagbar.nagbar"

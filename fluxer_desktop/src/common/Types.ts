@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type {RpcActivityUpdatePayload} from '@electron/common/RpcActivityTypes';
-import type {VoiceEngineV2BridgeApi} from '@fluxer/voice_engine_v2/bridge';
+import type {VoiceEngineV2BridgeHardwareEncoderApi} from '@fluxer/voice_engine_v2/bridge';
 import type {
 	AuthenticationResponseJSON,
 	PublicKeyCredentialCreationOptionsJSON,
@@ -15,12 +15,9 @@ export interface LinuxAppearanceSnapshot {
 	accent: {r: number; g: number; b: number} | null;
 }
 
-export type DesktopBuildVariant = 'default' | 'windows-game-capture';
-
 export interface DesktopInfo {
 	version: string;
 	channel: 'stable' | 'canary';
-	buildVariant: DesktopBuildVariant;
 	arch: string;
 	hardwareArch: string;
 	runningUnderRosetta: boolean;
@@ -75,14 +72,6 @@ export interface GpuInfo {
 
 export type StreamingPriorityDiagnostics = Record<string, unknown>;
 
-export interface OpenH264Status {
-	enabled: boolean;
-	downloaded: boolean;
-	downloading: boolean;
-	version: string | null;
-	error: string | null;
-}
-
 export interface CpuInfo {
 	model: string;
 	speed: number;
@@ -115,6 +104,7 @@ export interface DesktopWindowBehaviorSettings {
 	showTrayIcon: boolean;
 	minimizeToTray: boolean;
 	closeToTray: boolean;
+	startMinimized: boolean;
 	useNativeTitleBar: boolean;
 	activeUseNativeTitleBar: boolean;
 	rememberWindowState: boolean;
@@ -124,7 +114,6 @@ export interface DesktopWindowBehaviorSettings {
 	activeSmoothScrolling: boolean;
 	middleClickAutoscroll: boolean;
 	activeMiddleClickAutoscroll: boolean;
-	firstClickPassThroughWhenUnfocused: boolean;
 }
 
 export interface ThemeLocalFileReference {
@@ -145,6 +134,14 @@ export interface ThemeDirectoryCssFile {
 	fileName: string;
 	path: string;
 	css: string;
+}
+
+export type ThemeLinkedFileError = 'not_allowed' | 'missing' | 'not_file' | 'too_large' | 'too_many' | 'read_failed';
+
+export interface ThemeLinkedFileChange {
+	path: string;
+	css?: string;
+	error?: ThemeLinkedFileError;
 }
 
 export type VoiceBackgroundMediaKind = 'static' | 'animated' | 'video';
@@ -251,13 +248,9 @@ export type UpdaterEvent =
 export interface DownloadFileResult {
 	success: boolean;
 	canceled?: boolean;
+	checksumMismatch?: boolean;
 	path?: string;
 	error?: string;
-}
-
-export interface SwitchInstanceUrlOptions {
-	instanceUrl: string;
-	desktopHandoffCode?: string | null;
 }
 
 export type MediaAccessType = 'microphone' | 'camera' | 'screen' | 'audio-capture';
@@ -440,6 +433,7 @@ export interface NativeAudioApi {
 	listAudibleApplications: () => Promise<Array<NativeAudioApplication>>;
 	resolveAudioRootPidForSource: (sourceId: string) => Promise<number | null>;
 	start: (options: NativeAudioStartOptions) => Promise<NativeAudioStartResult>;
+	setRule: (captureId: string, linuxRule: NonNullable<NativeAudioStartOptions['linuxRule']>) => Promise<boolean>;
 	stop: (captureId: string) => Promise<void>;
 	getRoutingGraph: (captureId?: string) => Promise<NativeAudioRoutingGraphResult>;
 	onFrame: (callback: (message: NativeAudioFrameMessage) => void) => () => void;
@@ -482,8 +476,6 @@ export interface NativeScreenCaptureSource {
 	targetPid?: number;
 }
 
-export type GameCaptureInjectionMethod = 'auto' | 'remote-thread' | 'set-windows-hook';
-
 export interface NativeScreenCaptureRect {
 	x: number;
 	y: number;
@@ -497,7 +489,6 @@ export interface NativeScreenCaptureStartOptions {
 	width?: number;
 	height?: number;
 	frameRate?: number;
-	injectionMethod?: GameCaptureInjectionMethod;
 	captureId?: string;
 	colorRange?: 'full' | 'limited';
 	colorSpace?: 'rec709' | 'srgb';
@@ -533,7 +524,7 @@ export interface NativeScreenCaptureLifecycleMessage {
 	source?: NativeScreenCaptureLifecycleSource;
 }
 
-export type NativeScreenCaptureStrategy = 'game-hook' | 'dxgi-duplication' | 'window-gdi' | string;
+export type NativeScreenCaptureStrategy = 'wgc' | 'dxgi-duplication' | 'window-gdi' | string;
 
 export interface NativeScreenCaptureDiagnostics {
 	state?: number;
@@ -548,8 +539,6 @@ export interface NativeScreenCaptureDiagnostics {
 	droppedFrameCounter?: number;
 	lastPresentTimestampUs?: number;
 	lastError?: number;
-	requestedInjectionMethod?: string;
-	injectionMethod?: string;
 	activeStrategy?: NativeScreenCaptureStrategy;
 	lastFallbackReason?: string;
 	backend?: string;
@@ -648,15 +637,17 @@ export type TrayActionPayload =
 			action: 'check-for-updates';
 	  };
 
+export interface DomainMigrationApi {
+	version: 1;
+	setAppOrigin: (origin: string) => Promise<void>;
+}
+
 export interface ElectronAPI {
 	platform: NodeJS.Platform;
 	buildChannel: 'stable' | 'canary';
-	buildVariant: DesktopBuildVariant;
 	getDesktopInfo: () => Promise<DesktopInfo>;
 	getGpuInfo: () => Promise<GpuInfo>;
 	getLatestRpcActivityUpdate: () => Promise<RpcActivityUpdatePayload | null>;
-	getOpenH264Status: () => Promise<OpenH264Status>;
-	setOpenH264Enabled: (enabled: boolean) => Promise<OpenH264Status>;
 	getDesktopWindowBehaviorSettings: () => Promise<DesktopWindowBehaviorSettings>;
 	setDesktopWindowBehaviorSettings: (
 		settings: Partial<DesktopWindowBehaviorSettings>,
@@ -667,8 +658,10 @@ export interface ElectronAPI {
 	readThemeLocalFiles: (paths: Array<string>) => Promise<Array<ThemeLocalFileReadResult>>;
 	clearThemeLocalFiles: () => Promise<void>;
 	importThemeDirectory: () => Promise<Array<ThemeDirectoryCssFile>>;
+	pickThemeLinkedFiles: (options?: {multiple?: boolean}) => Promise<Array<ThemeDirectoryCssFile>>;
+	watchThemeLinkedFiles: (paths: Array<string>) => Promise<void>;
+	onThemeLinkedFileChange: (callback: (change: ThemeLinkedFileChange) => void) => () => void;
 	cacheVoiceBackgroundMedia: (options: VoiceBackgroundMediaCacheRequest) => Promise<VoiceBackgroundMediaCacheResult>;
-	resolveVoiceBackgroundMedia: (id: string) => Promise<VoiceBackgroundMediaCacheResult | null>;
 	readVoiceBackgroundMedia: (id: string) => Promise<VoiceBackgroundMediaReadResult | null>;
 	deleteVoiceBackgroundMedia: (id: string) => Promise<void>;
 	getDesktopTroubleshootingSettings: () => Promise<DesktopTroubleshootingSettings>;
@@ -701,7 +694,6 @@ export interface ElectronAPI {
 	pasteFromClipboard: () => Promise<void>;
 	onDeepLink: (callback: (url: string) => void) => () => void;
 	getInitialDeepLink: () => Promise<string | null>;
-	onRpcNavigate: (callback: (path: string) => void) => () => void;
 	autostartEnable: () => Promise<void>;
 	autostartDisable: () => Promise<void>;
 	autostartIsEnabled: () => Promise<boolean>;
@@ -715,7 +707,7 @@ export interface ElectronAPI {
 	requestInputMonitoringPermission: () => Promise<InputMonitoringPermissionStatus>;
 	getScreenRecordingPermissionStatus: () => Promise<InputMonitoringPermissionStatus>;
 	requestScreenRecordingPermission: () => Promise<InputMonitoringPermissionStatus>;
-	downloadFile: (url: string, defaultPath: string) => Promise<DownloadFileResult>;
+	downloadFile: (url: string, defaultPath: string, sha256?: string | null) => Promise<DownloadFileResult>;
 	toggleDevTools: () => void;
 	showNotification: (options: NotificationOptions) => Promise<NotificationResult>;
 	shouldPlayNotificationSound: () => Promise<boolean>;
@@ -787,12 +779,12 @@ export interface ElectronAPI {
 	passkeyIsSupported: () => Promise<boolean>;
 	passkeyAuthenticate: (options: PublicKeyCredentialRequestOptionsJSON) => Promise<AuthenticationResponseJSON>;
 	passkeyRegister: (options: PublicKeyCredentialCreationOptionsJSON) => Promise<RegistrationResponseJSON>;
-	switchInstanceUrl: (options: SwitchInstanceUrlOptions) => Promise<void>;
-	consumeDesktopHandoffCode: () => Promise<string | null>;
+	passkeyRpIds: ReadonlyArray<string>;
+	domainMigration: DomainMigrationApi;
 	virtmic: VirtmicApi;
 	nativeAudio: NativeAudioApi;
 	nativeScreenCapture: NativeScreenCaptureApi;
-	voiceEngine: VoiceEngineV2BridgeApi;
+	voiceEngine: VoiceEngineV2BridgeHardwareEncoderApi;
 	getDesktopSources: (
 		types: Array<'screen' | 'window'>,
 		requestId?: string,

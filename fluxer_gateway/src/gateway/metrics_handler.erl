@@ -7,14 +7,36 @@
 
 -spec init(cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 init(Req0, State) ->
-    Body = render_metrics(),
-    Req = cowboy_req:reply(
-        200,
-        #{<<"content-type">> => <<"text/plain; version=0.0.4; charset=utf-8">>},
-        Body,
-        Req0
-    ),
-    {ok, Req, State}.
+    case is_loopback_request(Req0) of
+        false ->
+            Req = cowboy_req:reply(
+                403,
+                #{<<"content-type">> => <<"text/plain">>},
+                <<"FORBIDDEN">>,
+                Req0
+            ),
+            {ok, Req, State};
+        true ->
+            Body = render_metrics(),
+            Req = cowboy_req:reply(
+                200,
+                #{<<"content-type">> => <<"text/plain; version=0.0.4; charset=utf-8">>},
+                Body,
+                Req0
+            ),
+            {ok, Req, State}
+    end.
+
+-spec is_loopback_request(cowboy_req:req()) -> boolean().
+is_loopback_request(Req) ->
+    case cowboy_req:peer(Req) of
+        {{127, 0, 0, 1}, _Port} ->
+            true;
+        {{0, 0, 0, 0, 0, 0, 0, 1}, _Port} ->
+            true;
+        _ ->
+            false
+    end.
 
 -spec render_metrics() -> iolist().
 render_metrics() ->
@@ -22,14 +44,16 @@ render_metrics() ->
         render_gateway_gauges(),
         render_cluster_counters(),
         render_process_counts(),
-        render_push_dispatcher_stats(),
-        render_hotpatch_metrics(),
+        render_push_outbox_stats(safe_apply_map(fun push_outbox:stats/0)),
         render_vm_metrics()
     ].
 
 -spec render_gateway_gauges() -> iolist().
 render_gateway_gauges() ->
     Sessions = safe_apply_int(fun session_manager:session_count/0),
+    DispatchDrops = safe_apply_int(fun gateway_cluster_metrics:dispatch_drops_total/0),
+    Dispatches = safe_apply_int(fun gateway_cluster_metrics:dispatches_total/0),
+    Resumes = safe_apply_int(fun gateway_cluster_metrics:resumes_total/0),
     Guilds = safe_apply_int(fun guild_manager:local_guild_count/0),
     VoiceCounts = safe_apply_map(fun voice_state_counts_cache:get_local_counts/0),
     CallIds = safe_apply_list(fun call_manager:local_call_ids/0),
@@ -44,10 +68,28 @@ render_gateway_gauges() ->
             integer_to_binary(Sessions)
         ),
         format_metric(
+            <<"fluxer_gateway_session_resumes_total">>,
+            <<"counter">>,
+            <<"Successful WebSocket session resumes">>,
+            integer_to_binary(Resumes)
+        ),
+        format_metric(
             <<"fluxer_gateway_guilds_total">>,
             <<"gauge">>,
             <<"Locally loaded guilds">>,
             integer_to_binary(Guilds)
+        ),
+        format_metric(
+            <<"fluxer_gateway_websocket_dispatches_total">>,
+            <<"counter">>,
+            <<"WebSocket dispatch frames handed to the transport, including replays">>,
+            integer_to_binary(Dispatches)
+        ),
+        format_metric(
+            <<"fluxer_gateway_websocket_dispatch_drops_total">>,
+            <<"counter">>,
+            <<"WebSocket dispatches dropped due to encoding or compression errors">>,
+            integer_to_binary(DispatchDrops)
         ),
         render_voice_metrics(VoiceCounts),
         format_metric(
@@ -231,57 +273,88 @@ count_registry_prefix(Prefix) ->
         error:badarg -> 0
     end.
 
--spec render_push_dispatcher_stats() -> iolist().
-render_push_dispatcher_stats() ->
-    Stats = safe_apply_map(fun push_dispatcher:stats/0),
-    case map_size(Stats) of
-        0 ->
-            [];
-        _ ->
-            Queued = maps:get(queued, Stats, 0),
-            Inflight = maps:get(inflight, Stats, 0),
-            [
-                format_metric(
-                    <<"fluxer_gateway_push_dispatcher_queued">>,
-                    <<"gauge">>,
-                    <<"Push dispatcher queued jobs">>,
-                    integer_to_binary(Queued)
-                ),
-                format_metric(
-                    <<"fluxer_gateway_push_dispatcher_inflight">>,
-                    <<"gauge">>,
-                    <<"Push dispatcher in-flight jobs">>,
-                    integer_to_binary(Inflight)
-                )
-            ]
-    end.
+-spec render_push_outbox_stats(map()) -> iolist().
+render_push_outbox_stats(Stats) when map_size(Stats) =:= 0 ->
+    [];
+render_push_outbox_stats(Stats) ->
+    [render_push_outbox_queue_stats(Stats), render_push_outbox_dropped(Stats)].
 
--spec render_hotpatch_metrics() -> iolist().
-render_hotpatch_metrics() ->
-    Status = safe_apply_map(fun gateway_hotpatch_reconciler:status/0),
-    Ready = maps:get(ready, Status, true),
-    Enabled = maps:get(enabled, Status, false),
-    AppliedCount = maps:get(applied_count, Status, 0),
+-spec render_push_outbox_queue_stats(map()) -> iolist().
+render_push_outbox_queue_stats(Stats) ->
     [
         format_metric(
-            <<"fluxer_gateway_hotpatch_enabled">>,
+            <<"fluxer_gateway_push_outbox_depth">>,
             <<"gauge">>,
-            <<"Gateway hotpatch reconciler enabled">>,
-            bool_metric(Enabled)
+            <<"Push jobs queued in the outbox">>,
+            gate_counter(depth, Stats)
         ),
         format_metric(
-            <<"fluxer_gateway_hotpatch_ready">>,
+            <<"fluxer_gateway_push_outbox_inflight">>,
             <<"gauge">>,
-            <<"Gateway hotpatch reconciliation readiness">>,
-            bool_metric(Ready)
+            <<"Push job requests awaiting a reply">>,
+            gate_counter(inflight, Stats)
         ),
         format_metric(
-            <<"fluxer_gateway_hotpatch_applied_events_total">>,
+            <<"fluxer_gateway_push_outbox_delivered_total">>,
             <<"counter">>,
-            <<"Gateway hotpatch events applied on this node">>,
-            integer_to_binary(AppliedCount)
+            <<"Push jobs acknowledged by the push service">>,
+            gate_counter(delivered, Stats)
+        ),
+        format_metric(
+            <<"fluxer_gateway_push_outbox_retries_total">>,
+            <<"counter">>,
+            <<"Push job requests scheduled for retry">>,
+            gate_counter(retries, Stats)
+        ),
+        format_metric(
+            <<"fluxer_gateway_push_outbox_sheds_total">>,
+            <<"counter">>,
+            <<"Earliest queued push jobs shed at outbox capacity">>,
+            gate_counter(sheds, Stats)
+        ),
+        format_metric(
+            <<"fluxer_gateway_push_outbox_truncations_total">>,
+            <<"counter">>,
+            <<"Queued recipients dropped because they read the channel">>,
+            gate_counter(truncations, Stats)
+        ),
+        format_metric(
+            <<"fluxer_gateway_push_outbox_skipped_active_total">>,
+            <<"counter">>,
+            <<"Queued recipients skipped because they became active">>,
+            gate_counter(skipped_active, Stats)
+        ),
+        format_metric(
+            <<"fluxer_gateway_push_outbox_followup_clears_total">>,
+            <<"counter">>,
+            <<"Clears queued after an in-flight push job whose recipient read the channel">>,
+            gate_counter(followup_clears, Stats)
         )
     ].
+
+-spec render_push_outbox_dropped(map()) -> iolist().
+render_push_outbox_dropped(Stats) ->
+    format_labeled_series(
+        <<"fluxer_gateway_push_outbox_dropped_total">>,
+        <<"counter">>,
+        <<"Push jobs dropped undelivered by kind and reason">>,
+        [
+            {push_outbox_dropped_label(Kind, Reason), integer_to_binary(Count)}
+         || {{Kind, Reason}, Count} <- lists:sort(maps:to_list(maps:get(dropped, Stats, #{}))),
+            is_atom(Kind),
+            is_atom(Reason),
+            is_integer(Count)
+        ]
+    ).
+
+-spec push_outbox_dropped_label(atom(), atom()) -> binary().
+push_outbox_dropped_label(Kind, Reason) ->
+    <<"kind=\"", (atom_to_binary(Kind))/binary, "\",reason=\"", (atom_to_binary(Reason))/binary,
+        "\"">>.
+
+-spec gate_counter(atom(), map()) -> binary().
+gate_counter(Key, Counters) ->
+    integer_to_binary(maps:get(Key, Counters, 0)).
 
 -spec render_vm_metrics() -> iolist().
 render_vm_metrics() ->
@@ -377,6 +450,31 @@ format_labeled_series(Name, Type, Help, LabelValues) ->
         ]
     ].
 
--spec bool_metric(term()) -> binary().
-bool_metric(true) -> <<"1">>;
-bool_metric(_) -> <<"0">>.
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+push_outbox_drops_render_one_series_per_kind_and_reason_test() ->
+    Rendered = iolist_to_binary(
+        render_push_outbox_dropped(#{
+            dropped => #{{message, expired} => 3, {clear, outbox_unavailable} => 1}
+        })
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            Rendered,
+            <<"fluxer_gateway_push_outbox_dropped_total{kind=\"message\",reason=\"expired\"} 3\n">>
+        )
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            Rendered,
+            <<"fluxer_gateway_push_outbox_dropped_total{kind=\"clear\",reason=\"outbox_unavailable\"} 1\n">>
+        )
+    ).
+
+push_outbox_without_drops_renders_no_dropped_series_test() ->
+    ?assertEqual([], render_push_outbox_dropped(#{dropped => #{}})).
+
+-endif.

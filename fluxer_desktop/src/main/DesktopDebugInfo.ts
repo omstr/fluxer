@@ -69,6 +69,30 @@ export function shouldDisableHardwareAccelerationForLaunch(argv: ReadonlyArray<s
 	return hasFlag(argv, DISABLE_HARDWARE_ACCELERATION_ARGS) || isSafeModeLaunch(argv);
 }
 
+export function resolveEffectiveDesktopTroubleshootingSettings(
+	settings: DesktopTroubleshootingSettings,
+	argv: ReadonlyArray<string>,
+	platform: NodeJS.Platform,
+): DesktopTroubleshootingSettings {
+	return {
+		...settings,
+		disableHardwareAcceleration:
+			platform !== 'darwin' &&
+			(settings.disableHardwareAcceleration || shouldDisableHardwareAccelerationForLaunch(argv)),
+	};
+}
+
+let launchTroubleshootingSettings: DesktopTroubleshootingSettings | null = null;
+
+export function getLaunchDesktopTroubleshootingSettings(): DesktopTroubleshootingSettings {
+	launchTroubleshootingSettings ??= resolveEffectiveDesktopTroubleshootingSettings(
+		getDesktopTroubleshootingSettings(),
+		process.argv,
+		process.platform,
+	);
+	return launchTroubleshootingSettings;
+}
+
 export function shouldOpenDevToolsOnLaunch(argv: ReadonlyArray<string>): boolean {
 	return hasFlag(argv, OPEN_DEVTOOLS_ARGS);
 }
@@ -249,20 +273,12 @@ function formatReleaseChannelLabel(value: string): string {
 	return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function formatBuildVariantLabel(value: DesktopInfo['buildVariant']): string {
-	if (value === 'windows-game-capture') {
-		return 'Windows Game Capture';
-	}
-	return '';
-}
-
 function getBuildString(desktopInfo: DesktopInfo): string {
 	const buildVersion = process.env.PUBLIC_BUILD_VERSION || process.env.BUILD_VERSION || desktopInfo.version || 'dev';
 	const releaseChannel = formatReleaseChannelLabel(
 		process.env.PUBLIC_RELEASE_CHANNEL || process.env.RELEASE_CHANNEL || desktopInfo.channel,
 	);
-	const buildVariant = formatBuildVariantLabel(desktopInfo.buildVariant);
-	return `${releaseChannel} Desktop${buildVariant ? ` ${buildVariant}` : ''} ${buildVersion}`;
+	return `${releaseChannel} Desktop ${buildVersion}`;
 }
 
 function safeGetLocale(): string {
@@ -305,7 +321,7 @@ export async function getDesktopDebugInfo(
 		logFilePath: getLogFilePath(),
 		configPath: path.join(userDataPath, 'settings.json'),
 		windowBehavior: getDesktopWindowBehaviorDebugSettings(),
-		troubleshooting: getDesktopTroubleshootingSettings(),
+		troubleshooting: getLaunchDesktopTroubleshootingSettings(),
 		packaged: app.isPackaged,
 		portable: isPortableMode(),
 		pid: process.pid,
@@ -322,6 +338,7 @@ function formatWindowBehavior(settings: DesktopWindowBehaviorSettings): string {
 		`showTrayIcon=${settings.showTrayIcon}`,
 		`minimizeToTray=${settings.minimizeToTray}`,
 		`closeToTray=${settings.closeToTray}`,
+		`startMinimized=${settings.startMinimized}`,
 		`useNativeTitleBar=${settings.useNativeTitleBar}`,
 		`rememberWindowState=${settings.rememberWindowState}`,
 		`allowTransparency=${settings.allowTransparency}`,
@@ -330,7 +347,6 @@ function formatWindowBehavior(settings: DesktopWindowBehaviorSettings): string {
 		`activeSmoothScrolling=${settings.activeSmoothScrolling}`,
 		`middleClickAutoscroll=${settings.middleClickAutoscroll}`,
 		`activeMiddleClickAutoscroll=${settings.activeMiddleClickAutoscroll}`,
-		`firstClickPassThroughWhenUnfocused=${settings.firstClickPassThroughWhenUnfocused}`,
 	].join(', ');
 }
 

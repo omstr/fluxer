@@ -9,12 +9,14 @@ import * as ChannelCommands from '@app/features/channel/commands/ChannelCommands
 import * as LinkChannelCommands from '@app/features/channel/commands/LinkChannelCommands';
 import * as PrivateChannelCommands from '@app/features/channel/commands/PrivateChannelCommands';
 import {ChannelDuplicateModal} from '@app/features/channel/components/modals/ChannelDuplicateModal';
+import {ChannelFollowModal} from '@app/features/channel/components/modals/ChannelFollowModal';
 import {ChannelSettingsModal} from '@app/features/channel/components/modals/ChannelSettingsModal';
 import {EditGroupModal} from '@app/features/channel/components/modals/EditGroupModal';
 import {GroupInvitesModal} from '@app/features/channel/components/modals/GroupInvitesModal';
 import {useDeleteMyMessagesInChannel} from '@app/features/channel/hooks/useDeleteMyMessagesInChannel';
 import type {Channel} from '@app/features/channel/models/Channel';
 import {duplicateChannel, getDuplicateChannelDefaultValues} from '@app/features/channel/utils/ChannelCreateModalUtils';
+import {canFollowAnnouncementChannel, FOLLOW_CHANNEL_DESCRIPTOR} from '@app/features/channel/utils/ChannelFollowUtils';
 import {
 	CLOSE_DM_DESCRIPTOR,
 	DELETE_CHANNEL_DESCRIPTOR,
@@ -38,10 +40,12 @@ import {
 	CHANNEL_DEBUG_DESCRIPTOR,
 	CHANNEL_DELETED_DESCRIPTOR,
 	COPY_CHANNEL_ID_DESCRIPTOR,
+	COPY_LINK_DESCRIPTOR,
 	DEBUG_CHANNEL_DESCRIPTOR,
 	EDIT_GROUP_DESCRIPTOR,
 	INVITE_PEOPLE_DESCRIPTOR,
 	INVITES_DESCRIPTOR,
+	LINK_COPIED_TO_CLIPBOARD_DESCRIPTOR,
 	MARK_AS_READ_DESCRIPTOR,
 	NOTIFICATION_SETTINGS_DESCRIPTOR,
 	OPEN_LINK_DESCRIPTOR,
@@ -54,13 +58,13 @@ import {
 import {InviteModal} from '@app/features/invite/components/modals/InviteModal';
 import * as InviteUtils from '@app/features/invite/utils/InviteUtils';
 import Favorites from '@app/features/messaging/state/Favorites';
-import {getEffectiveChannelMatureContent} from '@app/features/messaging/utils/ContentWarningUtils';
 import {buildChannelLink} from '@app/features/messaging/utils/MessageLinkUtils';
 import * as NavigationCommands from '@app/features/navigation/commands/NavigationCommands';
 import Permission from '@app/features/permissions/state/Permission';
 import {Logger} from '@app/features/platform/utils/AppLogger';
 import * as ReadStateCommands from '@app/features/read_state/commands/ReadStateCommands';
 import ReadStates from '@app/features/read_state/state/ReadStates';
+import {remFromPx} from '@app/features/theme/layout/RemFromPx';
 import {
 	CloseDMIcon,
 	CopyIcon,
@@ -88,13 +92,13 @@ import * as ToastCommands from '@app/features/ui/commands/ToastCommands';
 import type {MenuActionEvent, MenuGroupType, MenuItemType} from '@app/features/ui/menu_bottom_sheet/MenuBottomSheet';
 import UserGuildSettings from '@app/features/user/state/UserGuildSettings';
 import UserSettings from '@app/features/user/state/UserSettings';
-import Users from '@app/features/user/state/Users';
 import CompactVoiceCallHeight, {getGuildVoiceCallExpansionKey} from '@app/features/voice/state/CompactVoiceCallHeight';
 import {getMutedText} from '@app/lib/overlay/OverlayContextMenu';
 import {ME} from '@fluxer/constants/src/AppConstants';
 import {ChannelTypes, Permissions} from '@fluxer/constants/src/ChannelConstants';
 import {msg} from '@lingui/core/macro';
 import {useLingui} from '@lingui/react/macro';
+import {MegaphoneSimpleIcon} from '@phosphor-icons/react';
 import {useMemo} from 'react';
 
 const CHANNEL_LINK_COPIED_DESCRIPTOR = msg({
@@ -171,8 +175,10 @@ export interface ChannelMenuHandlers {
 	handleMarkAsRead: () => void;
 	handleToggleFavorite: () => void;
 	handleInviteMembers: () => void;
+	handleFollowChannel: () => void;
 	handleCopyChannelLink: () => Promise<void>;
 	handleOpenChannelLink: () => void;
+	handleCopyLinkChannelUrl: () => Promise<void>;
 	handleOpenChat: () => void;
 	handleOpenMuteSheet: () => void;
 	handleNotificationSettings: () => void;
@@ -203,8 +209,8 @@ export interface ChannelMenuState {
 	hasUnread: boolean;
 	canManageChannels: boolean;
 	canEditChannel: boolean;
-	nsfwBlockedForMinor: boolean;
 	canInvite: boolean;
+	canFollow: boolean;
 	developerMode: boolean;
 	isPinned: boolean;
 	mutedText: string | undefined;
@@ -214,7 +220,7 @@ function getChannelMenuState(channel: Channel, guild: Guild | undefined): Channe
 	const currentUserId = Authentication.currentUserId;
 	const isGroupDM = channel.type === ChannelTypes.GROUP_DM;
 	const isDM = channel.type === ChannelTypes.DM;
-	const isTextChannel = channel.type === ChannelTypes.GUILD_TEXT;
+	const isTextChannel = channel.type === ChannelTypes.GUILD_TEXT || channel.type === ChannelTypes.GUILD_ANNOUNCEMENT;
 	const isVoiceChannel = channel.type === ChannelTypes.GUILD_VOICE;
 	const isLinkChannel = channel.type === ChannelTypes.GUILD_LINK;
 	const isOwner = isGroupDM && channel.ownerId === currentUserId;
@@ -237,11 +243,8 @@ function getChannelMenuState(channel: Channel, guild: Guild | undefined): Channe
 			guildId: channel.guildId,
 		});
 	const canEditChannel = canManageChannels || canUpdateRtcRegion;
-	const currentUser = Users.getCurrentUser();
-	const channelIsNsfw =
-		(isTextChannel || isVoiceChannel || isLinkChannel) && getEffectiveChannelMatureContent(channel, guild ?? null);
-	const nsfwBlockedForMinor = channelIsNsfw && !!currentUser && !currentUser.matureContentAllowed;
 	const canInvite = InviteUtils.canInviteToChannel(channel.id, channel.guildId);
+	const canFollow = canFollowAnnouncementChannel(channel);
 	const developerMode = UserSettings.developerMode;
 	const isPinned = channel.isPinned;
 	return {
@@ -256,8 +259,8 @@ function getChannelMenuState(channel: Channel, guild: Guild | undefined): Channe
 		hasUnread,
 		canManageChannels,
 		canEditChannel,
-		nsfwBlockedForMinor,
 		canInvite,
+		canFollow,
 		developerMode,
 		isPinned,
 		mutedText,
@@ -305,6 +308,17 @@ export function useChannelMenuData(
 					)),
 				);
 			},
+			handleFollowChannel: () => {
+				ModalCommands.pushAfterBottomSheetClose(
+					onClose,
+					modal(() => (
+						<ChannelFollowModal
+							channelId={channel.id}
+							data-flx="ui.action-menu.items.channel-menu-data.handle-follow-channel.channel-follow-modal"
+						/>
+					)),
+				);
+			},
 			handleCopyChannelLink: async () => {
 				const link = buildChannelLink({
 					guildId: channel.guildId,
@@ -319,6 +333,15 @@ export function useChannelMenuData(
 			},
 			handleOpenChannelLink: () => {
 				LinkChannelCommands.openLinkChannel(channel);
+				onClose();
+			},
+			handleCopyLinkChannelUrl: async () => {
+				if (!channel.url) return;
+				await TextCopyCommands.copy(i18n, channel.url, true);
+				ToastCommands.createToast({
+					type: 'success',
+					children: i18n._(LINK_COPIED_TO_CLIPBOARD_DESCRIPTOR),
+				});
 				onClose();
 			},
 			handleOpenChat: () => {
@@ -671,11 +694,34 @@ export function useChannelMenuData(
 					onClick: handlers.handleInviteMembers,
 				});
 			}
+			if (state.canFollow) {
+				inviteItems.push({
+					icon: (
+						<MegaphoneSimpleIcon
+							size={remFromPx(20)}
+							weight="fill"
+							data-flx="ui.action-menu.items.channel-menu-data.groups.follow-icon"
+						/>
+					),
+					label: i18n._(FOLLOW_CHANNEL_DESCRIPTOR),
+					onClick: handlers.handleFollowChannel,
+				});
+			}
 			if (state.isLinkChannel && channel.url) {
 				inviteItems.push({
 					icon: <OpenLinkIcon size={20} data-flx="ui.action-menu.items.channel-menu-data.groups.open-link-icon" />,
 					label: i18n._(OPEN_LINK_DESCRIPTOR),
 					onClick: handlers.handleOpenChannelLink,
+				});
+				inviteItems.push({
+					icon: (
+						<CopyLinkIcon
+							size={20}
+							data-flx="ui.action-menu.items.channel-menu-data.groups.copy-link-channel-url-icon"
+						/>
+					),
+					label: i18n._(COPY_LINK_DESCRIPTOR),
+					onClick: handlers.handleCopyLinkChannelUrl,
 				});
 			}
 			inviteItems.push({
@@ -711,24 +757,21 @@ export function useChannelMenuData(
 			});
 			menuGroups.push({items: notificationItems});
 			if (state.canEditChannel) {
-				const manageItems: Array<MenuItemType> = [];
-				if (!state.nsfwBlockedForMinor) {
-					manageItems.push({
+				const manageItems: Array<MenuItemType> = [
+					{
 						icon: <SettingsIcon size={20} data-flx="ui.action-menu.items.channel-menu-data.groups.settings-icon" />,
 						label: i18n._(EDIT_CHANNEL_DESCRIPTOR),
 						onClick: handlers.handleChannelSettings,
-					});
-				}
-				if (state.canManageChannels && !state.nsfwBlockedForMinor) {
+					},
+				];
+				if (state.canManageChannels) {
 					manageItems.push({
 						icon: <CopyIcon size={20} data-flx="ui.action-menu.items.channel-menu-data.groups.copy-icon" />,
 						label: i18n._(DUPLICATE_CHANNEL_DESCRIPTOR),
 						onClick: handlers.handleDuplicateChannel,
 					});
 				}
-				if (manageItems.length > 0) {
-					menuGroups.push({items: manageItems});
-				}
+				menuGroups.push({items: manageItems});
 			}
 			const debugItems: Array<MenuItemType> = [];
 			if (state.developerMode) {

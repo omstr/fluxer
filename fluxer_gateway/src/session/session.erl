@@ -49,6 +49,7 @@
     offline_timer => {reference(), reference()} | undefined,
     guilds => #{guild_id() => guild_ref()},
     active_guilds => sets:set(guild_id()),
+    guild_health => #{guild_id() => {pid(), boolean()}},
     calls => #{channel_id() => call_ref()},
     channels => #{channel_id() => map()},
     ready => map() | undefined,
@@ -66,6 +67,8 @@
     pending_presences => pending_presence_buffer(),
     guild_connect_inflight => #{guild_id() => non_neg_integer()},
     guild_connect_workers => #{reference() => {guild_id(), non_neg_integer(), pid()}},
+    guild_connect_timers => #{guild_id() => {reference(), reference()}},
+    pending_guild_joins => #{guild_id() => true},
     voice_queue => queue:queue(map()),
     voice_queue_timer => reference() | undefined,
     debounce_reactions => boolean(),
@@ -81,7 +84,7 @@ start_link(SessionData) ->
 -spec init(map()) -> {ok, session_state()}.
 init(SessionData) ->
     process_flag(trap_exit, true),
-    erlang:process_flag(fullsweep_after, 0),
+    erlang:process_flag(fullsweep_after, 10),
     State0 = session_init:build_state(SessionData),
     ScheduleStartedAt = gateway_timings:start(),
     session_init:schedule_timers(State0),
@@ -97,6 +100,8 @@ init(SessionData) ->
     {reply, term(), session_state()} | {stop, normal, term(), session_state()}.
 handle_call({token_verify, Token}, _From, State) when is_binary(Token) ->
     session_lifecycle:handle_token_verify(Token, State);
+handle_call({is_staff}, _From, State) ->
+    session_lifecycle:handle_is_staff(State);
 handle_call({heartbeat_ack, Seq}, _From, State) when is_integer(Seq), Seq >= 0 ->
     session_lifecycle:handle_heartbeat_ack(Seq, State);
 handle_call({resume, Seq, SocketPid}, _From, State) when
@@ -130,11 +135,13 @@ handle_cast({dispatch, Event, {pre_encoded, EncodedData} = Data}, State) when
 ->
     session_dispatch:handle_dispatch(Event, Data, State);
 handle_cast({dispatch, Event, Data}, State) when
-    is_atom(Event), is_map(Data)
+    is_atom(Event), is_map(Data);
+    is_atom(Event), is_list(Data)
 ->
     session_dispatch:handle_dispatch(Event, Data, State);
 handle_cast({dispatch, Event, Data}, State) when
-    is_binary(Event), is_map(Data)
+    is_binary(Event), is_map(Data);
+    is_binary(Event), is_list(Data)
 ->
     session_dispatch:handle_dispatch(Event, Data, State);
 handle_cast({initial_global_presences, Presences}, State) ->
@@ -156,6 +163,10 @@ handle_cast_presences(Presences, State) ->
 
 -spec handle_cast_guild_or_lifecycle(term(), session_state()) ->
     {noreply, session_state()} | {stop, normal, session_state()}.
+handle_cast_guild_or_lifecycle({guild_health, GuildId, GuildPid, Degraded}, State) when
+    is_integer(GuildId), is_pid(GuildPid), is_boolean(Degraded)
+->
+    session_guild_health:handle_update(GuildId, GuildPid, Degraded, State);
 handle_cast_guild_or_lifecycle(handoff_fence, State) ->
     session_lifecycle:handle_handoff_fence(State);
 handle_cast_guild_or_lifecycle({reconnect_drain, SocketPid}, State) when
@@ -164,7 +175,7 @@ handle_cast_guild_or_lifecycle({reconnect_drain, SocketPid}, State) when
     session_lifecycle:handle_reconnect_drain(SocketPid, State);
 handle_cast_guild_or_lifecycle({guild_join, GuildId}, State) when is_integer(GuildId) ->
     self() ! {guild_connect, GuildId, 0},
-    {noreply, State};
+    {noreply, session_bot_guilds:track_join(GuildId, State)};
 handle_cast_guild_or_lifecycle({store_guild_subscriptions, Data}, State) when is_map(Data) ->
     {noreply, session_guilds:store_guild_subscriptions(Data, State)};
 handle_cast_guild_or_lifecycle({guild_leave, GuildId, forced_unavailable, true}, State) when
@@ -224,16 +235,20 @@ handle_info({guild_connect, GuildId, Attempt}, State) when
     session_connection:handle_guild_connect(GuildId, Attempt, State);
 handle_info({guild_connect_result, _, _, _} = Msg, State) ->
     handle_info_guild_connect_result(Msg, State);
-handle_info({guild_connect_timeout, GuildId, Attempt}, State) when
-    is_integer(GuildId), is_integer(Attempt), Attempt >= 0
+handle_info({guild_connect_timeout, GuildId, Attempt, Token}, State) when
+    is_integer(GuildId), is_integer(Attempt), Attempt >= 0, is_reference(Token)
 ->
-    session_connection:handle_guild_connect_timeout(GuildId, Attempt, State);
+    session_connection:handle_guild_connect_timeout(GuildId, Attempt, Token, State);
 handle_info({call_reconnect, ChannelId, Attempt}, State) when
     is_integer(ChannelId), is_integer(Attempt), Attempt >= 0
 ->
     session_connection:handle_call_reconnect(ChannelId, Attempt, State);
 handle_info({gateway_timing_update, Timings}, State) ->
     {noreply, gateway_timings:merge_state(Timings, State)};
+handle_info({dm_partner_mutual, GuildId, PartnerIds}, State) when
+    is_integer(GuildId), is_list(PartnerIds)
+->
+    session_dm_partners:handle_mutual(GuildId, PartnerIds, State);
 handle_info(Msg, State) ->
     handle_info_lifecycle(Msg, State).
 
@@ -310,7 +325,8 @@ do_handle_info_misc(_Info, State) ->
 
 -spec handle_presence_rejoin_check(session_state()) -> {noreply, session_state()}.
 handle_presence_rejoin_check(State) ->
-    {noreply, session_connection:repair_presence_connection(State)}.
+    RepairedState = session_connection:repair_presence_connection(State),
+    {noreply, session_dispatch_presence:sync_presence_targets(RepairedState)}.
 
 -spec terminate(term(), session_state()) -> ok.
 terminate(Reason, State) ->
@@ -318,7 +334,7 @@ terminate(Reason, State) ->
 
 -spec code_change(term(), session_state(), term()) -> {ok, session_state()}.
 code_change(_OldVsn, State, _Extra) ->
-    erlang:process_flag(fullsweep_after, 0),
+    erlang:process_flag(fullsweep_after, 10),
     erlang:garbage_collect(),
     {ok, State}.
 

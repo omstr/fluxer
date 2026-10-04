@@ -5,7 +5,6 @@ import {LongPressable} from '@app/features/app/components/LongPressable';
 import {getChannelUnreadState} from '@app/features/app/components/layout/utils/ChannelUnreadState';
 import {CustomStatusDisplay} from '@app/features/app/components/shared/custom_status_display/CustomStatusDisplay';
 import {GroupDMAvatar} from '@app/features/app/components/shared/GroupDMAvatar';
-import {useChannelHoverPreload} from '@app/features/app/hooks/useChannelHoverPreload';
 import {useContextMenuHoverState} from '@app/features/app/hooks/useContextMenuHoverState';
 import {UserTag} from '@app/features/channel/components/ChannelUserTag';
 import styles from '@app/features/channel/components/direct_message/DirectMessageList.module.css';
@@ -40,12 +39,12 @@ import {MenuBottomSheet} from '@app/features/ui/menu_bottom_sheet/MenuBottomShee
 import KeyboardMode from '@app/features/ui/state/KeyboardMode';
 import MobileLayout from '@app/features/ui/state/MobileLayout';
 import {Tooltip} from '@app/features/ui/tooltip/Tooltip';
+import {formatShortRelativeTime} from '@app/features/ui/utils/ShortRelativeTimeLabels';
 import type {User} from '@app/features/user/models/User';
 import UserGuildSettings from '@app/features/user/state/UserGuildSettings';
 import Users from '@app/features/user/state/Users';
 import * as NicknameUtils from '@app/features/user/utils/NicknameUtils';
 import {ChannelTypes, MessageTypes} from '@fluxer/constants/src/ChannelConstants';
-import {formatShortRelativeTime} from '@fluxer/date_utils/src/DateDuration';
 import {extractTimestamp} from '@fluxer/snowflake/src/SnowflakeUtils';
 import {msg, plural} from '@lingui/core/macro';
 import {useLingui} from '@lingui/react/macro';
@@ -132,9 +131,10 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 		: TypingIndicator.isTyping(channel.id, recipientId);
 	const hasUnreadMessages = () => ReadStates.hasUnread(channel.id);
 	const isMobile = MobileLayout.isMobileLayout();
-	const isMuted = UserGuildSettings.isChannelMuted(null, channel.id);
+	const isMuted = UserGuildSettings.isChannelDirectlyMuted(null, channel.id);
 	const mentionCount = ReadStates.getMentionCount(channel.id);
 	const unreadState = getChannelUnreadState({
+		hasUnread: ReadStates.hasUnread(channel.id),
 		unreadCount: ReadStates.getUnreadCount(channel.id),
 		mentionCount,
 		isMuted,
@@ -198,15 +198,9 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 		leaveGroup,
 		i18n,
 	});
-	const {scheduleChannelPreload, cancelChannelPreload, preloadChannelNow} = useChannelHoverPreload({
-		channel,
-		guild: null,
-		preloadMemberList: false,
-	});
 	const handleNavigate = useCallback(() => {
-		preloadChannelNow();
 		handlers.navigateTo();
-	}, [handlers.navigateTo, preloadChannelNow]);
+	}, [handlers.navigateTo]);
 	const mobileMenuGroups = buildMobileMenuGroups({
 		channel,
 		recipient,
@@ -233,7 +227,7 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 		transition: {duration: 0},
 	};
 	const relativeTime = channel.lastMessageId
-		? formatShortRelativeTime(extractTimestamp(channel.lastMessageId), '1m')
+		? formatShortRelativeTime(i18n, extractTimestamp(channel.lastMessageId), '1m')
 		: null;
 	const shouldShowMessagePreviewSetting = (() => {
 		if (Accessibility.dmMessagePreviewMode === DMMessagePreviewMode.ALL) {
@@ -249,7 +243,7 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 		const isCurrentUser = lastMessage.author.id === currentUser?.id;
 		const authorPrefix = isCurrentUser
 			? `${i18n._(YOU_DESCRIPTOR)}: `
-			: `${NicknameUtils.getNickname(lastMessage.author)}: `;
+			: `${NicknameUtils.getNickname(lastMessage.author, null, channel.id)}: `;
 		if (lastMessage.type !== MessageTypes.DEFAULT && lastMessage.type !== MessageTypes.REPLY) {
 			const systemText = SystemMessageUtils.stringify(lastMessage, i18n);
 			if (systemText) {
@@ -272,6 +266,7 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 								channelId: channel.id,
 								messageId: lastMessage.id,
 								disableAnimatedEmoji: true,
+								disableInteractions: true,
 								mentionChannels: lastMessage.mentionChannels,
 							}}
 							data-flx="channel.direct-message.dm-list-item.get-message-preview.safe-markdown"
@@ -505,8 +500,6 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 					)}
 					onClick={handleNavigate}
 					onContextMenu={handleContextMenu}
-					onMouseEnter={scheduleChannelPreload}
-					onMouseLeave={cancelChannelPreload}
 					onFocus={() => setIsFocused(true)}
 					onBlur={() => setIsFocused(false)}
 					data-dm-list-focus-item="true"

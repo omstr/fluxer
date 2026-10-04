@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Accessibility from '@app/features/accessibility/state/Accessibility';
+import {showDmActionErrorModal} from '@app/features/app/components/alerts/DmActionErrorModal';
 import {FeatureTemporarilyDisabledModal} from '@app/features/app/components/alerts/FeatureTemporarilyDisabledModal';
+import {showGenericErrorModal} from '@app/features/app/components/alerts/GenericErrorModalCommands';
 import {ConfirmModal} from '@app/features/app/components/dialogs/ConfirmModal';
 import {PRODUCT_NAME} from '@app/features/app/config/I18nDisplayConstants';
 import {Endpoints} from '@app/features/app/constants/Endpoints';
 import Authentication from '@app/features/auth/state/Authentication';
 import Channels from '@app/features/channel/state/Channels';
 import DeveloperOptions from '@app/features/devtools/state/DeveloperOptions';
+import GatewayConnection from '@app/features/gateway/transport/GatewayConnection';
 import GuildMatureContentAgree from '@app/features/guild/state/GuildMatureContentAgree';
 import {DELETE_MESSAGE_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
 import GuildMembers from '@app/features/member/state/GuildMembers';
@@ -15,10 +18,15 @@ import {
 	type MessageFetchCacheHit,
 	resolveMessageFetchExecutionDecision,
 	resolveMessageFetchPreflightDecision,
+	resolveMessageFetchWindowCached,
 } from '@app/features/messaging/commands/MessageFetchStateMachine';
 import {resolveMessagePageState} from '@app/features/messaging/commands/MessagePageStateMachine';
+import {MessageCrosspostLimitModal} from '@app/features/messaging/components/alerts/MessageCrosspostLimitModal';
 import {MessageDeleteFailedModal} from '@app/features/messaging/components/alerts/MessageDeleteFailedModal';
 import {MessageDeleteTooQuickModal} from '@app/features/messaging/components/alerts/MessageDeleteTooQuickModal';
+import {MessageEditFailedModal} from '@app/features/messaging/components/alerts/MessageEditFailedModal';
+import {MessageEditTooQuickModal} from '@app/features/messaging/components/alerts/MessageEditTooQuickModal';
+import {PublishedMessageEditLimitModal} from '@app/features/messaging/components/alerts/PublishedMessageEditLimitModal';
 import type {Message as MessageModel} from '@app/features/messaging/models/MessagingMessage';
 import type {JumpOptions} from '@app/features/messaging/state/ChannelMessages';
 import MessageEdit from '@app/features/messaging/state/MessageEdit';
@@ -31,25 +39,30 @@ import {
 	collectMessageModelGuildMemberUserIds,
 	collectWireMessageGuildMemberUserIds,
 } from '@app/features/messaging/utils/MessageMemberLoadUtils';
-import type {
-	ApiAttachmentMetadata,
-	ApiMessageEditAttachmentMetadata,
+import {
+	type ApiAttachmentMetadata,
+	type ApiMessageEditAttachmentMetadata,
+	buildMessageEditRequest,
+	normalizeMessageContent,
 } from '@app/features/messaging/utils/MessageRequestUtils';
+import {resolveRetryAfterMs} from '@app/features/messaging/utils/RetryAfterUtils';
 import * as IARCommands from '@app/features/moderation/commands/IARCommands';
 import * as NavigationCommands from '@app/features/navigation/commands/NavigationCommands';
 import Permission from '@app/features/permissions/state/Permission';
 import {http} from '@app/features/platform/transport/RestTransport';
 import {HttpError} from '@app/features/platform/types/EndpointError';
-import {Logger} from '@app/features/platform/utils/AppLogger';
-import {ComponentDispatch} from '@app/features/platform/utils/ComponentBus';
-import {failureCode} from '@app/features/platform/utils/ResponseInspection';
-import * as ReadStateCommands from '@app/features/read_state/commands/ReadStateCommands';
 import type {RestResponse} from '@app/features/platform/types/TransportTypes';
+import {Logger} from '@app/features/platform/utils/AppLogger';
+import {ComponentBus} from '@app/features/platform/utils/ComponentBus';
+import {failureCode, failureMessage} from '@app/features/platform/utils/ResponseInspection';
+import * as ReadStateCommands from '@app/features/read_state/commands/ReadStateCommands';
 import ReadStates from '@app/features/read_state/state/ReadStates';
 import * as SlowmodeCommands from '@app/features/slowmode/commands/SlowmodeCommands';
 import * as ModalCommands from '@app/features/ui/commands/ModalCommands';
 import {modal} from '@app/features/ui/commands/ModalCommands';
+import * as ToastCommands from '@app/features/ui/commands/ToastCommands';
 import {Switch} from '@app/features/ui/components/form/FormSwitch';
+import {blockIfAccountLimited, handleAccountLimitedError} from '@app/features/user/utils/AccountLimitUtils';
 import {APIErrorCodes} from '@fluxer/constants/src/ApiErrorCodes';
 import {MessageFlags, Permissions} from '@fluxer/constants/src/ChannelConstants';
 import type {JumpType} from '@fluxer/constants/src/JumpConstants';
@@ -78,7 +91,44 @@ const ALSO_REPORT_TO_SAFETY_TEAM_DESCRIPTOR = msg({
 	comment:
 		'Toggle-switch label in the moderator delete-message confirmation dialog. When enabled, the message is reported (category: other) before being deleted. {productName} is the product name (e.g., Fluxer).',
 });
+const DELETE_PUBLISHED_MESSAGE_BODY_DESCRIPTOR = msg({
+	message:
+		"Delete this message? Can't be undone. This message is also removed from every community that follows this channel.",
+	comment:
+		'Body of the delete confirmation for a message that was published from an announcement channel to the channels that follow it.',
+});
+const EDIT_PUBLISHED_MESSAGE_TITLE_DESCRIPTOR = msg({
+	message: 'Edit published message?',
+	comment: 'Title of the confirmation shown before saving an edit to a message published from an announcement channel.',
+});
+const EDIT_PUBLISHED_MESSAGE_BODY_DESCRIPTOR = msg({
+	message:
+		'Your changes reach every community that follows this channel, which can take a minute. Each published message allows 3 quick edits, then 1 every 20 minutes.',
+	comment: 'Body of the confirmation shown before saving an edit to a message published from an announcement channel.',
+});
+const SAVE_EDIT_DESCRIPTOR = msg({
+	message: 'Save',
+	comment: 'Confirm button on the alert shown before saving an edit to a published announcement message.',
+});
+const MESSAGE_PUBLISHED_DESCRIPTOR = msg({
+	message: 'Message published',
+	comment: 'Toast shown after a message in an announcement channel was published to the channels that follow it.',
+});
+const MESSAGE_ALREADY_PUBLISHED_DESCRIPTOR = msg({
+	message: 'This message has already been published',
+	comment: 'Toast shown when someone tries to publish an announcement message that was already published.',
+});
+const COULD_NOT_PUBLISH_MESSAGE_DESCRIPTOR = msg({
+	message: "Couldn't publish this message",
+	comment: 'Title of the error alert shown when publishing an announcement message fails.',
+});
+const TRY_PUBLISHING_AGAIN_DESCRIPTOR = msg({
+	message: 'Something went wrong while publishing. Try again in a moment.',
+	comment: 'Fallback body of the error alert shown when publishing an announcement message fails.',
+});
 const logger = new Logger('MessageCommands');
+const MESSAGE_EDIT_MAX_RETRIES = 5;
+const MESSAGE_EDIT_TIMEOUT_MS = 30_000;
 const pendingDeletePromises = new Map<string, Promise<void>>();
 const pendingFetchPromises = new Map<string, Promise<Array<WireMessage>>>();
 
@@ -100,7 +150,7 @@ export interface JumpToMessageOptions {
 	messageId: string;
 	flash?: boolean;
 	offset?: number;
-	returnTargetId?: string | null;
+	returnToMessageId?: string | null;
 	returnChannelId?: string | null;
 	returnGuildId?: string | null;
 	jumpType?: JumpType;
@@ -108,6 +158,7 @@ export interface JumpToMessageOptions {
 
 interface FetchMessagesOptions {
 	throwOnError?: boolean;
+	staleRefetch?: boolean;
 }
 
 interface MessagePageState {
@@ -135,13 +186,14 @@ function makeFetchKey(
 ): string {
 	const SEP = '\x1f';
 	const throwOnError = options?.throwOnError ? '1' : '0';
+	const staleRefetch = options?.staleRefetch ? '1' : '0';
 	if (!jump) {
-		return `${channelId}${SEP}${before ?? ''}${SEP}${after ?? ''}${SEP}${limit}${SEP}${throwOnError}`;
+		return `${channelId}${SEP}${before ?? ''}${SEP}${after ?? ''}${SEP}${limit}${SEP}${throwOnError}${SEP}${staleRefetch}`;
 	}
 	return (
-		`${channelId}${SEP}${before ?? ''}${SEP}${after ?? ''}${SEP}${limit}${SEP}${throwOnError}${SEP}` +
+		`${channelId}${SEP}${before ?? ''}${SEP}${after ?? ''}${SEP}${limit}${SEP}${throwOnError}${SEP}${staleRefetch}${SEP}` +
 		`${jump.present ? '1' : '0'}${SEP}${jump.messageId ?? ''}${SEP}${jump.offset ?? 0}${SEP}` +
-		`${jump.flash ? '1' : '0'}${SEP}${jump.returnMessageId ?? ''}${SEP}` +
+		`${jump.flash ? '1' : '0'}${SEP}${jump.returnToMessageId ?? ''}${SEP}` +
 		`${jump.returnChannelId ?? ''}${SEP}${jump.returnGuildId ?? ''}${SEP}${jump.jumpType ?? ''}`
 	);
 }
@@ -236,6 +288,7 @@ function handleMessageFetchSuccess(
 	channelId: string,
 	messages: Array<WireMessage>,
 	pageState: MessagePageState,
+	cached: boolean,
 	jump?: JumpOptions,
 ): void {
 	Messages.handleLoadMessagesSuccess({
@@ -245,7 +298,7 @@ function handleMessageFetchSuccess(
 		isAfter: pageState.isAfter,
 		hasMoreBefore: pageState.hasMoreBefore,
 		hasMoreAfter: pageState.hasMoreAfter,
-		cached: false,
+		cached,
 		jump,
 	});
 	ReadStates.handleLoadMessages({
@@ -291,14 +344,14 @@ interface SendMessageParams {
 	tts?: boolean;
 }
 
-export function jumpToPresent(channelId: string, limit = MAX_MESSAGES_PER_CHANNEL): void {
+export function jumpToLiveEdge(channelId: string, limit = MAX_MESSAGES_PER_CHANNEL): void {
 	NavigationCommands.clearMessageIdForChannel(channelId);
 	logger.debug(`Jumping to present in channel ${channelId}`);
 	ReadStateCommands.clearStickyUnread(channelId);
 	const jump: JumpOptions = {
 		present: true,
 	};
-	if (Messages.hasPresent(channelId)) {
+	if (Messages.hasNewestMessages(channelId)) {
 		Messages.handleLoadMessagesSuccessCached({channelId, jump, limit});
 	} else {
 		fetchMessages(channelId, null, null, limit, jump);
@@ -310,7 +363,7 @@ export function jumpToMessage({
 	messageId,
 	flash = true,
 	offset,
-	returnTargetId,
+	returnToMessageId,
 	returnChannelId,
 	returnGuildId,
 	jumpType,
@@ -320,7 +373,7 @@ export function jumpToMessage({
 		messageId: messageId as MessageId,
 		flash,
 		offset,
-		returnMessageId: returnTargetId as MessageId | null | undefined,
+		returnToMessageId: returnToMessageId as MessageId | null | undefined,
 		returnChannelId,
 		returnGuildId,
 		jumpType,
@@ -334,13 +387,16 @@ function getMessageFetchCacheHit(
 	jump?: JumpOptions,
 ): MessageFetchCacheHit | null {
 	const messages = Messages.getMessages(channelId);
+	if (!messages.ready || messages.cached) {
+		return null;
+	}
 	if (jump?.messageId && messages.has(jump.messageId, false)) {
 		return 'jump';
 	}
-	if (before && messages.hasBeforeCached(before)) {
+	if (before && messages.canServeOlderFrom(before)) {
 		return 'before';
 	}
-	if (after && messages.hasAfterCached(after)) {
+	if (after && messages.canServeNewerFrom(after)) {
 		return 'after';
 	}
 	return null;
@@ -405,13 +461,21 @@ export async function fetchMessages(
 			return handleForcedMessageLoadFailure(channelId, jump);
 		}
 		Messages.handleLoadMessages({channelId, jump});
+		const connectedAtRequest = GatewayConnection.isConnected;
+		const epochAtRequest = GatewayConnection.connectionEpoch;
 		try {
 			const timeStart = Date.now();
 			logger.debug(`Fetching messages for channel ${channelId}`);
 			const messages = await requestChannelMessages(channelId, before, after, limit, jump);
+			const cached = resolveMessageFetchWindowCached({
+				connectedAtRequest,
+				connectedAtResponse: GatewayConnection.isConnected,
+				epochAtRequest,
+				epochAtResponse: GatewayConnection.connectionEpoch,
+			});
 			const pageState = calculateMessagePageState(channelId, before, after, limit, messages, jump);
 			logger.info(`Fetched ${messages.length} messages for channel ${channelId}, took ${Date.now() - timeStart}ms`);
-			handleMessageFetchSuccess(channelId, messages, pageState, jump);
+			handleMessageFetchSuccess(channelId, messages, pageState, cached, jump);
 			return messages;
 		} catch (error) {
 			logger.error(`Failed to fetch messages for channel ${channelId}:`, error);
@@ -510,8 +574,7 @@ export async function send(channelId: string, params: SendMessageParams): Promis
 		MessageQueue.rejectLocalRateLimitedSend(channelId, params.nonce, params.hasAttachments);
 		return null;
 	}
-	const sendOrder =
-		Accessibility.sequentialFileSend && params.hasAttachments ? nextChannelOrder(channelId) : -1;
+	const sendOrder = Accessibility.sequentialFileSend && params.hasAttachments ? nextChannelOrder(channelId) : -1;
 	const prepared = await prepareSendAttachments(channelId, params);
 	if (!prepared) {
 		if (Accessibility.sequentialFileSend) {
@@ -601,7 +664,68 @@ function showDeleteFailureModal(error: unknown, messageId: string): void {
 	);
 }
 
-export function edit(
+function showPublishedEditLimitModal(error: unknown): boolean {
+	if (!(error instanceof HttpError) || failureCode(error) !== APIErrorCodes.PUBLISHED_MESSAGE_EDIT_RATE_LIMITED) {
+		return false;
+	}
+	const retryAfterMs = resolveRetryAfterMs(error);
+	ModalCommands.push(
+		modal(() => (
+			<PublishedMessageEditLimitModal
+				retryAfter={retryAfterMs === null ? undefined : Math.ceil(retryAfterMs / 1000)}
+				data-flx="messaging.message-commands.published-message-edit-limit-modal"
+			/>
+		)),
+	);
+	return true;
+}
+
+function showEditFailureModal(error: unknown): void {
+	if (handleAccountLimitedError(error)) {
+		return;
+	}
+	if (showPublishedEditLimitModal(error)) {
+		return;
+	}
+	if (error instanceof HttpError) {
+		const errorCode = failureCode(error);
+		if (error.status === 429) {
+			const retryAfterMs = resolveRetryAfterMs(error);
+			ModalCommands.push(
+				modal(() => (
+					<MessageEditTooQuickModal
+						retryAfter={retryAfterMs === null ? undefined : Math.ceil(retryAfterMs / 1000)}
+						data-flx="messaging.message-commands.message-edit-too-quick-modal"
+					/>
+				)),
+			);
+			return;
+		}
+		if (error.status === 403 && errorCode === APIErrorCodes.FEATURE_TEMPORARILY_DISABLED) {
+			ModalCommands.push(
+				modal(() => (
+					<FeatureTemporarilyDisabledModal data-flx="messaging.message-commands.message-edit-feature-temporarily-disabled-modal" />
+				)),
+			);
+			return;
+		}
+		if (errorCode === APIErrorCodes.CONTENT_BLOCKED) {
+			void import('@app/features/auth/components/ContentBlockedHandler').then((module) =>
+				module.showContentBlockedModal(),
+			);
+			return;
+		}
+	}
+	if (failureCode(error) === APIErrorCodes.NEW_CONVERSATIONS_LIMITED) {
+		showDmActionErrorModal(error);
+		return;
+	}
+	ModalCommands.push(
+		modal(() => <MessageEditFailedModal data-flx="messaging.message-commands.message-edit-failed-modal" />),
+	);
+}
+
+export async function edit(
 	channelId: string,
 	messageId: string,
 	content?: string,
@@ -609,31 +733,23 @@ export function edit(
 	allowedMentions?: AllowedMentions,
 	attachments?: Array<ApiMessageEditAttachmentMetadata>,
 ): Promise<WireMessage | null> {
-	return new Promise<WireMessage | null>((resolve) => {
-		logger.debug(`Enqueueing edit for message ${messageId} in channel ${channelId}`);
-		MessageQueue.enqueue(
-			{
-				type: 'edit',
-				channelId,
-				messageId,
-				content,
-				allowedMentions,
-				flags,
-				attachments,
-			},
-			(result, error) => {
-				if (result?.body) {
-					logger.debug(`Message edited successfully: ${messageId} in channel ${channelId}`);
-					resolve(result.body);
-				} else {
-					if (error) {
-						logger.debug(`Message edit failed: ${messageId} in channel ${channelId}`, error);
-					}
-					resolve(null);
-				}
-			},
-		);
-	});
+	logger.debug(`Editing message ${messageId} in channel ${channelId}`);
+	const isPublished = Messages.getMessage(channelId, messageId)?.isCrossposted === true;
+	try {
+		const response = await http.patch<WireMessage>(Endpoints.CHANNEL_MESSAGE(channelId, messageId), {
+			body: buildMessageEditRequest({content, flags, allowedMentions, attachments}),
+			mode: isPublished ? 'strict' : 'auto-retry',
+			retries: MESSAGE_EDIT_MAX_RETRIES,
+			timeoutMs: MESSAGE_EDIT_TIMEOUT_MS,
+			suppressContentBlockedModal: true,
+		});
+		logger.debug(`Message edited successfully: ${messageId} in channel ${channelId}`);
+		return response.body ?? null;
+	} catch (error) {
+		logger.error(`Message edit failed: ${messageId} in channel ${channelId}`, error);
+		showEditFailureModal(error);
+		return null;
+	}
 }
 
 export async function remove(channelId: string, messageId: string): Promise<void> {
@@ -683,7 +799,11 @@ export function showDeleteConfirmation(
 		modal(() => (
 			<ConfirmModal
 				title={i18n._(DELETE_MESSAGE_DESCRIPTOR)}
-				description={i18n._(ARE_YOU_SURE_YOU_WANT_TO_DELETE_THIS_DESCRIPTOR)}
+				description={
+					message.isCrossposted
+						? i18n._(DELETE_PUBLISHED_MESSAGE_BODY_DESCRIPTOR)
+						: i18n._(ARE_YOU_SURE_YOU_WANT_TO_DELETE_THIS_DESCRIPTOR)
+				}
 				message={message}
 				primaryText={i18n._(DELETE_DESCRIPTOR)}
 				primaryVariant="danger"
@@ -716,6 +836,93 @@ export function showDeleteConfirmation(
 	);
 }
 
+export function confirmPublishedMessageEdit(i18n: I18n, message: MessageModel, submit: () => void): void {
+	if (!message.isCrossposted) {
+		submit();
+		return;
+	}
+	ModalCommands.push(
+		modal(() => (
+			<ConfirmModal
+				title={i18n._(EDIT_PUBLISHED_MESSAGE_TITLE_DESCRIPTOR)}
+				description={i18n._(EDIT_PUBLISHED_MESSAGE_BODY_DESCRIPTOR)}
+				message={message}
+				primaryText={i18n._(SAVE_EDIT_DESCRIPTOR)}
+				primaryVariant="primary"
+				onPrimary={submit}
+				data-flx="messaging.message-commands.confirm-published-message-edit.confirm-modal"
+			/>
+		)),
+	);
+}
+
+function showCrosspostFailure(i18n: I18n, error: unknown): void {
+	if (handleAccountLimitedError(error)) {
+		return;
+	}
+	const errorCode = failureCode(error);
+	if (
+		error instanceof HttpError &&
+		error.status === 429 &&
+		errorCode === APIErrorCodes.MESSAGE_CROSSPOST_RATE_LIMITED
+	) {
+		const retryAfterMs = resolveRetryAfterMs(error);
+		ModalCommands.push(
+			modal(() => (
+				<MessageCrosspostLimitModal
+					retryAfter={retryAfterMs === null ? undefined : Math.ceil(retryAfterMs / 1000)}
+					data-flx="messaging.message-commands.show-crosspost-failure.message-crosspost-limit-modal"
+				/>
+			)),
+		);
+		return;
+	}
+	if (errorCode === APIErrorCodes.MESSAGE_ALREADY_CROSSPOSTED) {
+		ToastCommands.error(i18n._(MESSAGE_ALREADY_PUBLISHED_DESCRIPTOR));
+		return;
+	}
+	if (error instanceof HttpError && error.status === 403 && errorCode === APIErrorCodes.FEATURE_TEMPORARILY_DISABLED) {
+		ModalCommands.push(
+			modal(() => (
+				<FeatureTemporarilyDisabledModal data-flx="messaging.message-commands.show-crosspost-failure.feature-temporarily-disabled-modal" />
+			)),
+		);
+		return;
+	}
+	if (errorCode === APIErrorCodes.CONTENT_BLOCKED) {
+		void import('@app/features/auth/components/ContentBlockedHandler').then((module) =>
+			module.showContentBlockedModal(),
+		);
+		return;
+	}
+	const apiMessage =
+		errorCode === APIErrorCodes.MESSAGE_NOT_CROSSPOSTABLE || errorCode === APIErrorCodes.ANNOUNCEMENT_CHANNEL_REQUIRED
+			? failureMessage(error)
+			: undefined;
+	showGenericErrorModal({
+		title: i18n._(COULD_NOT_PUBLISH_MESSAGE_DESCRIPTOR),
+		message: apiMessage ?? i18n._(TRY_PUBLISHING_AGAIN_DESCRIPTOR),
+		dataFlx: 'messaging.message-commands.show-crosspost-failure.generic-error-modal',
+	});
+}
+
+export async function crosspost(i18n: I18n, channelId: string, messageId: string): Promise<boolean> {
+	logger.debug(`Publishing message ${messageId} in channel ${channelId}`);
+	if (blockIfAccountLimited()) return false;
+	try {
+		await http.post<WireMessage>(Endpoints.CHANNEL_MESSAGE_CROSSPOST(channelId, messageId), {
+			mode: 'strict',
+			suppressContentBlockedModal: true,
+		});
+		ToastCommands.createToast({type: 'success', children: i18n._(MESSAGE_PUBLISHED_DESCRIPTOR)});
+		return true;
+	} catch (error) {
+		logger.error(`Failed to publish message ${messageId} in channel ${channelId}:`, error);
+		showCrosspostFailure(i18n, error);
+		return false;
+	}
+}
+
 export function deleteLocal(channelId: string, messageId: string): void {
 	logger.debug(`Deleting message ${messageId} locally in channel ${channelId}`);
 	Messages.handleMessageDelete({id: messageId, channelId});
@@ -729,12 +936,12 @@ export function revealMessage(channelId: string, messageId: string | null): void
 export function startReply(channelId: string, messageId: string, mentioning: boolean): void {
 	logger.debug(`Starting reply to message ${messageId} in channel ${channelId}, mentioning=${mentioning}`);
 	MessageReply.startReply(channelId, messageId, mentioning);
-	ComponentDispatch.dispatch('FOCUS_TEXTAREA', {channelId});
+	ComponentBus.dispatch('FOCUS_TEXTAREA', {channelId});
 	window.requestAnimationFrame(() => {
-		ComponentDispatch.dispatch('FOCUS_TEXTAREA', {channelId});
+		ComponentBus.dispatch('FOCUS_TEXTAREA', {channelId});
 	});
 	window.setTimeout(() => {
-		ComponentDispatch.dispatch('FOCUS_TEXTAREA', {channelId});
+		ComponentBus.dispatch('FOCUS_TEXTAREA', {channelId});
 	}, 300);
 }
 
@@ -815,6 +1022,7 @@ export async function forward(
 	optionalMessage?: string,
 ): Promise<boolean> {
 	logger.debug(`Forwarding message ${messageReference.message_id} to ${channelIds.length} channels`);
+	const normalizedComment = optionalMessage == null ? null : normalizeMessageContent(optionalMessage);
 	try {
 		for (const channelId of channelIds) {
 			const nonce = SnowflakeUtils.fromTimestamp(Date.now());
@@ -829,24 +1037,25 @@ export async function forward(
 					embed_indices: messageReference.embed_indices,
 					type: 1,
 				},
-				flags: 1,
+				flags: normalizedComment?.flags ?? 0,
 			});
 			if (!forwardedMessage) {
 				logger.warn(`Forward send failed in channel ${channelId}`);
 				return false;
 			}
-			SlowmodeCommands.recordMessageSend(channelId);
-			if (optionalMessage) {
+			SlowmodeCommands.confirmMessageSend(channelId, forwardedMessage.timestamp);
+			if (normalizedComment != null && normalizedComment.content.length > 0) {
 				const commentNonce = SnowflakeUtils.fromTimestamp(Date.now() + 1);
 				const commentMessage = await send(channelId, {
-					content: optionalMessage,
+					content: normalizedComment.content,
 					nonce: commentNonce,
+					flags: normalizedComment.flags,
 				});
 				if (!commentMessage) {
 					logger.warn(`Forward comment send failed in channel ${channelId}`);
 					return false;
 				}
-				SlowmodeCommands.recordMessageSend(channelId);
+				SlowmodeCommands.confirmMessageSend(channelId, commentMessage.timestamp);
 			}
 		}
 		logger.debug('Successfully forwarded message to all channels');
@@ -879,6 +1088,9 @@ export async function toggleSuppressEmbeds(channelId: string, messageId: string,
 		logger.debug(`Successfully ${isSuppressed ? 'unsuppressed' : 'suppressed'} embeds for message ${messageId}`);
 	} catch (error) {
 		logger.error('Failed to toggle suppress embeds:', error);
+		if (handleAccountLimitedError(error) || showPublishedEditLimitModal(error)) {
+			return;
+		}
 		throw error;
 	}
 }
@@ -906,13 +1118,17 @@ async function requestAttachmentDelete(channelId: string, messageId: string, att
 	await http.delete(Endpoints.CHANNEL_MESSAGE_ATTACHMENT(channelId, messageId, attachmentId));
 }
 
-export async function deleteAttachment(channelId: string, messageId: string, attachmentId: string): Promise<void> {
+export async function deleteAttachment(channelId: string, messageId: string, attachmentId: string): Promise<boolean> {
 	try {
 		logger.debug(`Deleting attachment ${attachmentId} from message ${messageId}`);
 		await requestAttachmentDelete(channelId, messageId, attachmentId);
 		logger.debug(`Successfully deleted attachment ${attachmentId} from message ${messageId}`);
+		return true;
 	} catch (error) {
 		logger.error('Failed to delete attachment:', error);
+		if (showPublishedEditLimitModal(error)) {
+			return false;
+		}
 		throw error;
 	}
 }

@@ -6,18 +6,27 @@ import {
 	type NagbarState,
 	NagbarType,
 } from '@app/features/app/components/layout/app_layout/AppLayoutTypes';
-import {isCanaryTesterCtaDismissed} from '@app/features/app/components/layout/app_layout/CanaryTesterDismissal';
 import {isScheduledMaintenanceNagbarDismissed} from '@app/features/app/components/layout/app_layout/ScheduledMaintenanceDismissal';
 import Config from '@app/features/app/config/Config';
+import DomainMovedNotice from '@app/features/app/domain_migration/DomainMovedNotice';
+import {isClientReconnecting} from '@app/features/app/state/ClientReadiness';
 import Initialization from '@app/features/app/state/Initialization';
 import RuntimeConfig from '@app/features/app/state/RuntimeConfig';
+import Updater from '@app/features/app/state/Updater';
 import Authentication from '@app/features/auth/state/Authentication';
 import Channels from '@app/features/channel/state/Channels';
 import DeveloperOptions from '@app/features/devtools/state/DeveloperOptions';
 import GatewayConnection from '@app/features/gateway/transport/GatewayConnection';
-import GuildMembers from '@app/features/member/state/GuildMembers';
 import * as NotificationUtils from '@app/features/notification/utils/NotificationUtils';
 import NativePermission from '@app/features/permissions/system/state/NativePermission';
+import {resolvePriceAnnouncementCampaign} from '@app/features/premium/config/PriceAnnouncementCampaign';
+import PremiumState from '@app/features/premium/state/PremiumState';
+import {getPremiumGraceEndDate} from '@app/features/premium/utils/PremiumGrace';
+import {
+	canServiceStripeSubscriptions,
+	getStoreOwnedSubscription,
+	shouldShowPremiumFeatures,
+} from '@app/features/premium/utils/PremiumUtils';
 import StreamerMode from '@app/features/streamer_mode/state/StreamerMode';
 import Nagbar from '@app/features/ui/state/Nagbar';
 import {hasUnavailableElectronNativeContext, isDesktop} from '@app/features/ui/utils/NativeUtils';
@@ -33,12 +42,10 @@ import {
 	getVoiceSessionRestoreSnapshotKey,
 	isRestorableVoiceChannelType,
 } from '@app/features/voice/utils/VoiceSessionRestoreUtils';
-import {CANARY_TESTER_MIN_ACCOUNT_AGE_MS, CANARY_TESTERS_GUILD_ID} from '@fluxer/constants/src/AppConstants';
 import {ChannelTypes} from '@fluxer/constants/src/ChannelConstants';
 import {PRIVACY_POLICY_LAST_UPDATED, TERMS_OF_SERVICE_LAST_UPDATED} from '@fluxer/constants/src/PolicyConstants';
 import {UserPremiumTypes} from '@fluxer/constants/src/UserConstants';
 import {MS_PER_DAY} from '@fluxer/date_utils/src/DateConstants';
-import * as SnowflakeUtils from '@fluxer/snowflake/src/SnowflakeUtils';
 import {useEffect, useMemo, useState} from 'react';
 
 function sortNagbarsByPriority(a: NagbarState, b: NagbarState): number {
@@ -47,12 +54,16 @@ function sortNagbarsByPriority(a: NagbarState, b: NagbarState): number {
 
 export function selectVisibleNagbars(nagbars: Array<NagbarState>): Array<NagbarState> {
 	const visibleNagbars = nagbars.filter((nagbar) => nagbar.visible).sort(sortNagbarsByPriority);
-	const nonDismissible = visibleNagbars.filter((nagbar) => !nagbar.dismissible);
-	const dismissible = visibleNagbars.filter((nagbar) => nagbar.dismissible);
+	const pinned = visibleNagbars.filter((nagbar) => nagbar.type === NagbarType.BUILD_ENVIRONMENT);
+	const selectable = visibleNagbars.filter((nagbar) => nagbar.type !== NagbarType.BUILD_ENVIRONMENT);
+	const nonDismissible = selectable.filter((nagbar) => !nagbar.dismissible);
+	const dismissible = selectable.filter((nagbar) => nagbar.dismissible);
 	const selectedNonDismissible = nonDismissible.slice(0, 1);
 	const selectedDismissible = dismissible.slice(0, 1);
-	return [...selectedNonDismissible, ...selectedDismissible].sort(sortNagbarsByPriority);
+	return [...pinned, ...selectedNonDismissible, ...selectedDismissible].sort(sortNagbarsByPriority);
 }
+
+const BUILD_ENVIRONMENT_HIDDEN_RELEASE_CHANNELS = new Set<string>(['stable', 'canary']);
 
 export const useAppLayoutState = (): AppLayoutState => {
 	const [isStandalone, setIsStandalone] = useState(isStandalonePwa());
@@ -76,6 +87,10 @@ export const useNagbarConditions = (): NagbarConditions => {
 	const premiumWillCancel = user?.premiumWillCancel ?? false;
 	const isMockPremium = premiumOverrideType != null && premiumOverrideType > 0;
 	const isSelfHosted = RuntimeConfig.isSelfHosted();
+	const showPremium = shouldShowPremiumFeatures();
+	const canServiceSubscription =
+		!isSelfHosted ||
+		(canServiceStripeSubscriptions() && (user?.premiumBillingCycle != null || user?.hasEverPurchased === true));
 	const [startupVoiceSessionRestoreSnapshotKey, setStartupVoiceSessionRestoreSnapshotKey] = useState<
 		string | null | undefined
 	>(undefined);
@@ -104,46 +119,66 @@ export const useNagbarConditions = (): NagbarConditions => {
 		return true;
 	})();
 	const canShowPremiumGracePeriod = (() => {
-		if (isSelfHosted) return false;
+		if (!showPremium || !canServiceSubscription) return false;
 		if (nagbarState.forceHidePremiumGracePeriod) return false;
 		if (nagbarState.forcePremiumGracePeriod) return true;
-		if (!user?.premiumUntil || user.premiumType === 2 || premiumWillCancel) return false;
+		if (!user?.premiumUntil || !user.premiumGraceEndsAt || !user.premiumBillingCycle || user.premiumType === 2) {
+			return false;
+		}
 		const now = new Date();
-		const expiryDate = new Date(user.premiumUntil);
-		const gracePeriodMs = 3 * MS_PER_DAY;
-		const graceEndDate = new Date(expiryDate.getTime() + gracePeriodMs);
-		const isInGracePeriod = now > expiryDate && now <= graceEndDate;
-		return isInGracePeriod;
+		const isInGracePeriod = now > new Date(user.premiumUntil) && now <= new Date(user.premiumGraceEndsAt);
+		return isInGracePeriod && !nagbarState.premiumGracePeriodDismissed;
 	})();
 	const canShowPremiumExpired = (() => {
-		if (isSelfHosted) return false;
+		if (!showPremium || !canServiceSubscription) return false;
 		if (nagbarState.forceHidePremiumExpired) return false;
 		if (nagbarState.forcePremiumExpired) return true;
 		if (!user?.premiumUntil || user.premiumType === 2 || premiumWillCancel) return false;
 		const now = new Date();
 		const expiryDate = new Date(user.premiumUntil);
-		const gracePeriodMs = 3 * MS_PER_DAY;
 		const expiredStateDurationMs = 30 * MS_PER_DAY;
-		const graceEndDate = new Date(expiryDate.getTime() + gracePeriodMs);
-		const expiredStateEndDate = new Date(expiryDate.getTime() + expiredStateDurationMs);
+		const graceEndDate = getPremiumGraceEndDate(expiryDate, user.premiumGraceEndsAt);
+		const expiredStateEndDate = new Date(graceEndDate.getTime() + expiredStateDurationMs);
 		const isExpired = now > graceEndDate;
 		const showExpiredState = isExpired && now <= expiredStateEndDate;
-		return showExpiredState;
+		return showExpiredState && !nagbarState.premiumExpiredDismissed;
 	})();
 	const canShowGiftInventory = (() => {
-		if (isSelfHosted) return false;
+		if (!showPremium) return false;
 		if (nagbarState.forceHideGiftInventory) return false;
 		if (nagbarState.forceGiftInventory) return true;
 		return Boolean(user?.hasUnreadGiftInventory && !nagbarState.giftInventoryDismissed);
 	})();
 	const canShowPremiumOnboarding = (() => {
-		if (isSelfHosted) return false;
+		if (!showPremium) return false;
 		if (nagbarState.forceHidePremiumOnboarding) return false;
 		if (nagbarState.forcePremiumOnboarding) return true;
 		if (isMockPremium) return false;
 		return Boolean(
 			user?.isPremium() && !user?.hasDismissedPremiumOnboarding && !nagbarState.premiumOnboardingDismissed,
 		);
+	})();
+	const premiumState = PremiumState.loadedForUserId === user?.id ? PremiumState.state : null;
+	const priceAnnouncementCampaign = resolvePriceAnnouncementCampaign(premiumState);
+	const hasPurchaseReadyAccount = Boolean(user?.isClaimed() && (!RuntimeConfig.emailsEnabled || user.verified));
+	const canShowPriceAnnouncement = (() => {
+		if (isSelfHosted) return false;
+		if (!hasPurchaseReadyAccount) return false;
+		if (!premiumState || !priceAnnouncementCampaign) return false;
+		if (premiumState.actual.has_active_paid_premium) return false;
+		return !nagbarState.getPriceAnnouncementDismissed(priceAnnouncementCampaign.campaign.id);
+	})();
+	const canShowLegacyPriceOptIn = (() => {
+		if (isSelfHosted) return false;
+		if (!hasPurchaseReadyAccount) return false;
+		if (!premiumState || !priceAnnouncementCampaign) return false;
+		if (getStoreOwnedSubscription(premiumState)) return false;
+		const listPriceSwitch = premiumState.billing.list_price_switch ?? null;
+		if (!listPriceSwitch?.available || listPriceSwitch.pending) return false;
+		if (listPriceSwitch.currency !== priceAnnouncementCampaign.currency) return false;
+		if (listPriceSwitch.current_amount_minor == null || listPriceSwitch.list_amount_minor == null) return false;
+		if (listPriceSwitch.effective_at == null || listPriceSwitch.billing_cycle == null) return false;
+		return !nagbarState.getLegacyPriceOptInDismissed(priceAnnouncementCampaign.campaign.id);
 	})();
 	const isNativeDesktop = isDesktop();
 	const hasBrokenElectronNativeContext = hasUnavailableElectronNativeContext();
@@ -167,21 +202,6 @@ export const useNagbarConditions = (): NagbarConditions => {
 		if (!user) return false;
 		if (isSelfHosted) return false;
 		return !nagbarState.guildMembershipCtaDismissed;
-	})();
-	void nagbarState.canaryTesterCtaDismissalVersion;
-	const canShowCanaryTesterCta = (() => {
-		if (nagbarState.forceHideCanaryTesterCta) return false;
-		if (nagbarState.forceCanaryTesterCta) return true;
-		if (!user) return false;
-		if (isSelfHosted) return false;
-		if (Config.PUBLIC_RELEASE_CHANNEL !== 'canary') return false;
-		if (user.bot) return false;
-		if (!user.email || !user.verified) return false;
-		if (user.requiredActions && user.requiredActions.length > 0) return false;
-		if (SnowflakeUtils.age(user.id) < CANARY_TESTER_MIN_ACCOUNT_AGE_MS) return false;
-		if (GuildMembers.getMember(CANARY_TESTERS_GUILD_ID, user.id)) return false;
-		if (isCanaryTesterCtaDismissed()) return false;
-		return true;
 	})();
 	void nagbarState.scheduledMaintenanceDismissalVersion;
 	const canShowScheduledMaintenance = (() => {
@@ -240,6 +260,20 @@ export const useNagbarConditions = (): NagbarConditions => {
 	const canShowLinuxInputAccess = NativePermission.shouldShowLinuxInputAccessNagbar;
 	const canShowSoftwareEncoder = SoftwareEncoderWarning.showWarning;
 	const canShowStreamerMode = StreamerMode.shouldShowNagbar;
+	const canShowDesktopUpdateReady = Updater.shouldShowUpdateReadyNagbar;
+	const canShowDomainMoved = nagbarState.forceHideDomainMoved
+		? false
+		: nagbarState.forceDomainMoved
+			? true
+			: DomainMovedNotice.shouldShow(Date.now());
+	const canShowBuildEnvironment =
+		!BUILD_ENVIRONMENT_HIDDEN_RELEASE_CHANNELS.has(Config.PUBLIC_RELEASE_CHANNEL) &&
+		!nagbarState.buildEnvironmentDismissedThisSession;
+	const canShowConnection = nagbarState.forceHideConnectionNotice
+		? false
+		: nagbarState.forceConnectionNotice
+			? true
+			: isClientReconnecting();
 	const needsTermsAcceptance = (() => {
 		if (!user) return false;
 		if (isSelfHosted) return false;
@@ -255,6 +289,8 @@ export const useNagbarConditions = (): NagbarConditions => {
 		return termsOutdated || privacyOutdated;
 	})();
 	return {
+		canShowBuildEnvironment,
+		canShowConnection,
 		canShowCorruptedInstallation: nagbarState.forceHideCorruptedInstallation
 			? false
 			: nagbarState.forceCorruptedInstallation
@@ -271,6 +307,11 @@ export const useNagbarConditions = (): NagbarConditions => {
 			: nagbarState.forceEmailVerification
 				? true
 				: Boolean(RuntimeConfig.emailsEnabled && user?.isClaimed() && !user.verified),
+		canShowAccountLimited: nagbarState.forceHideAccountLimited
+			? false
+			: nagbarState.forceAccountLimited
+				? true
+				: user?.accountLimited === true,
 		canShowDesktopNotification: nagbarState.forceHideDesktopNotification
 			? false
 			: nagbarState.forceDesktopNotification
@@ -279,21 +320,36 @@ export const useNagbarConditions = (): NagbarConditions => {
 		canShowPremiumGracePeriod,
 		canShowPremiumExpired,
 		canShowPremiumOnboarding,
+		canShowPriceAnnouncement,
+		canShowLegacyPriceOptIn,
 		canShowGiftInventory,
 		canShowDesktopDownload,
 		canShowGuildMembershipCta,
 		canShowVisionaryMfa,
 		canShowVoiceSessionRestore,
 		needsTermsAcceptance,
-		canShowCanaryTesterCta,
 		canShowLinuxInputAccess,
 		canShowSoftwareEncoder,
 		canShowStreamerMode,
+		canShowDesktopUpdateReady,
+		canShowDomainMoved,
 	};
 };
 export const useActiveNagbars = (conditions: NagbarConditions): Array<NagbarState> => {
 	return useMemo(() => {
 		const nagbars: Array<NagbarState> = [
+			{
+				type: NagbarType.BUILD_ENVIRONMENT,
+				priority: -1000,
+				visible: conditions.canShowBuildEnvironment,
+				dismissible: true,
+			},
+			{
+				type: NagbarType.CONNECTION,
+				priority: -100,
+				visible: conditions.canShowConnection,
+				dismissible: false,
+			},
 			{
 				type: NagbarType.CORRUPTED_INSTALLATION,
 				priority: -10,
@@ -325,6 +381,12 @@ export const useActiveNagbars = (conditions: NagbarConditions): Array<NagbarStat
 				dismissible: false,
 			},
 			{
+				type: NagbarType.ACCOUNT_LIMITED,
+				priority: -3.75,
+				visible: conditions.canShowAccountLimited,
+				dismissible: false,
+			},
+			{
 				type: NagbarType.PREMIUM_EXPIRED,
 				priority: 0,
 				visible: conditions.canShowPremiumExpired,
@@ -343,6 +405,12 @@ export const useActiveNagbars = (conditions: NagbarConditions): Array<NagbarStat
 				dismissible: true,
 			},
 			{
+				type: NagbarType.LEGACY_PRICE_OPT_IN,
+				priority: 2,
+				visible: conditions.canShowLegacyPriceOptIn,
+				dismissible: true,
+			},
+			{
 				type: NagbarType.PREMIUM_ONBOARDING,
 				priority: 4,
 				visible: conditions.canShowPremiumOnboarding,
@@ -352,6 +420,12 @@ export const useActiveNagbars = (conditions: NagbarConditions): Array<NagbarStat
 				type: NagbarType.GIFT_INVENTORY,
 				priority: 5,
 				visible: conditions.canShowGiftInventory,
+				dismissible: true,
+			},
+			{
+				type: NagbarType.PRICE_ANNOUNCEMENT,
+				priority: 5.5,
+				visible: conditions.canShowPriceAnnouncement,
 				dismissible: true,
 			},
 			{
@@ -385,12 +459,6 @@ export const useActiveNagbars = (conditions: NagbarConditions): Array<NagbarStat
 				dismissible: true,
 			},
 			{
-				type: NagbarType.CANARY_TESTER_CTA,
-				priority: 6.5,
-				visible: conditions.canShowCanaryTesterCta,
-				dismissible: true,
-			},
-			{
 				type: NagbarType.SOFTWARE_ENCODER,
 				priority: -2,
 				visible: conditions.canShowSoftwareEncoder,
@@ -400,6 +468,18 @@ export const useActiveNagbars = (conditions: NagbarConditions): Array<NagbarStat
 				type: NagbarType.STREAMER_MODE,
 				priority: -2.5,
 				visible: conditions.canShowStreamerMode,
+				dismissible: true,
+			},
+			{
+				type: NagbarType.DESKTOP_UPDATE_READY,
+				priority: -1.5,
+				visible: conditions.canShowDesktopUpdateReady,
+				dismissible: true,
+			},
+			{
+				type: NagbarType.DOMAIN_MOVED,
+				priority: 3,
+				visible: conditions.canShowDomainMoved,
 				dismissible: true,
 			},
 		];

@@ -10,9 +10,14 @@ import Messages from '@app/features/messaging/state/MessagingMessages';
 import SessionManager from '@app/features/platform/state/AuthSession';
 import {http} from '@app/features/platform/transport/RestTransport';
 import {Logger} from '@app/features/platform/utils/AppLogger';
+import Users from '@app/features/user/state/Users';
 import type {Message as WireMessage} from '@fluxer/schema/src/domains/message/MessageResponseSchemas';
 import type {HarvestStatusResponse} from '@fluxer/schema/src/domains/user/UserHarvestSchemas';
-import type {PasswordChangeCompleteResponse, UserPrivate} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
+import type {
+	BackupCode,
+	PasswordChangeCompleteResponse,
+	UserPrivate,
+} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import type {PublicKeyCredentialCreationOptionsJSON, RegistrationResponseJSON} from '@simplewebauthn/browser';
 
 export interface BulkDeleteMyMessagesFilter {
@@ -35,37 +40,6 @@ const logger = new Logger('User');
 interface FluxerTagAvailabilityResponse {
 	taken: boolean;
 }
-
-interface PhoneVerifyResult {
-	verified: true;
-}
-
-export interface InboundPhoneChallengeResponse {
-	challenge_code: string;
-	our_number: string;
-	expires_at: string;
-}
-
-export type PhoneInboundChallengeReason =
-	| 'voip'
-	| 'canadian'
-	| 'unknown_line_type'
-	| 'expensive_destination'
-	| 'account_forced'
-	| 'behavioural_risk';
-
-export interface PhoneSendVerificationInboundChallengeResponse extends InboundPhoneChallengeResponse {
-	channel: 'inbound_challenge';
-	reason: PhoneInboundChallengeReason;
-}
-
-export type PhoneVerificationSendChannel = 'sms' | 'inbound_challenge';
-export type PhoneSendVerificationResult =
-	| {
-			channel: 'sms';
-	  }
-	| PhoneSendVerificationInboundChallengeResponse;
-type PhoneSendVerificationApiResponse = PhoneSendVerificationResult;
 
 interface EmailChangeStartResponse {
 	ticket: string;
@@ -116,10 +90,16 @@ type UserUpdatePayload = Partial<UserPrivate> & {
 };
 type UserUpdateResponse = UserPrivate & {
 	token?: string;
+	auth_session_id_hash?: string;
 };
 
 interface HarvestRequestResponse {
 	harvest_id: string;
+}
+
+interface WebAuthnTwoFactorResponse {
+	user: UserPrivate;
+	backup_codes: Array<BackupCode> | null;
 }
 
 export type PreloadedDirectMessages = Record<string, WireMessage>;
@@ -135,17 +115,6 @@ async function requestUserUpdate(user: UserUpdatePayload): Promise<UserUpdateRes
 	return response.body;
 }
 
-function phoneVerificationRequest(
-	phone: string,
-	channel?: PhoneVerificationSendChannel,
-): {phone: string; channel?: PhoneVerificationSendChannel} {
-	return channel ? {phone, channel} : {phone};
-}
-
-function phoneCodeRequest(phone: string, code: string): {phone: string; code: string} {
-	return {phone, code};
-}
-
 function emailTicketRequest(ticket: string): {ticket: string} {
 	return {ticket};
 }
@@ -158,8 +127,14 @@ function requestNewEmailBody(
 	ticket: string,
 	newEmail: string,
 	originalProof: string,
-): {ticket: string; new_email: string; original_proof: string} {
-	return {ticket, new_email: newEmail, original_proof: originalProof};
+	newPassword?: string,
+): {ticket: string; new_email: string; original_proof: string; new_password?: string} {
+	return {
+		ticket,
+		new_email: newEmail,
+		original_proof: originalProof,
+		...(newPassword != null ? {new_password: newPassword} : {}),
+	};
 }
 
 function verifyNewEmailBody(
@@ -184,22 +159,6 @@ function completePasswordChangeBody(
 		verification_proof: verificationProof,
 		new_password: newPassword,
 	};
-}
-
-async function emailApplySudoPayload(): Promise<SudoVerificationPayload> {
-	return Sudo.hasValidToken()
-		? {}
-		: await SudoPrompt.requestVerification({
-				method: 'POST',
-				path: Endpoints.USER_EMAIL_CHANGE_APPLY,
-			});
-}
-
-async function requestEmailApply(emailToken: string): Promise<UserUpdateResponse> {
-	const response = await http.post<UserUpdateResponse>(Endpoints.USER_EMAIL_CHANGE_APPLY, {
-		body: {email_token: emailToken, ...(await emailApplySudoPayload())},
-	});
-	return response.body;
 }
 
 function webAuthnRegistrationBody(
@@ -245,6 +204,11 @@ export async function update(user: UserUpdatePayload): Promise<UserUpdateRespons
 			logger.debug(`Updated fields: ${updatedFields.join(', ')}`);
 		}
 		if (userData.token) {
+			SessionManager.setToken(userData.token);
+			GatewayConnection.setToken(userData.token);
+			if (userData.auth_session_id_hash) {
+				AuthSession.handleAuthSessionChange(userData.auth_session_id_hash);
+			}
 			logger.debug('Authentication token was refreshed');
 		}
 		return userData;
@@ -269,53 +233,6 @@ export async function checkFluxerTagAvailability({
 		return response.body.taken;
 	} catch (error) {
 		logger.error('Failed to check FluxerTag availability:', error);
-		throw error;
-	}
-}
-
-export async function startInboundPhoneChallenge(): Promise<InboundPhoneChallengeResponse> {
-	try {
-		logger.debug('Starting inbound phone challenge');
-		const response = await http.post<InboundPhoneChallengeResponse>(Endpoints.USER_PHONE_INBOUND_CHALLENGE, {
-			body: {},
-		});
-		logger.debug('Inbound phone challenge started');
-		return response.body;
-	} catch (error) {
-		logger.error('Failed to start inbound phone challenge', error);
-		throw error;
-	}
-}
-
-export async function sendPhoneVerification(
-	phone: string,
-	channel?: PhoneVerificationSendChannel,
-): Promise<PhoneSendVerificationResult> {
-	try {
-		logger.debug('Sending phone verification code');
-		const response = await http.post<PhoneSendVerificationApiResponse | undefined>(
-			Endpoints.USER_PHONE_SEND_VERIFICATION,
-			{body: phoneVerificationRequest(phone, channel)},
-		);
-		logger.debug('Phone verification code sent');
-		if (!response.body) return {channel: 'sms'};
-		return response.body;
-	} catch (error) {
-		logger.error('Failed to send phone verification code', error);
-		throw error;
-	}
-}
-
-export async function verifyPhone(phone: string, code: string): Promise<PhoneVerifyResult> {
-	try {
-		logger.debug('Verifying phone code');
-		const response = await http.post<PhoneVerifyResult>(Endpoints.USER_PHONE_VERIFY, {
-			body: phoneCodeRequest(phone, code),
-		});
-		logger.debug('Phone code verified');
-		return response.body;
-	} catch (error) {
-		logger.error('Failed to verify phone code', error);
 		throw error;
 	}
 }
@@ -365,11 +282,12 @@ export async function requestEmailChangeNew(
 	ticket: string,
 	newEmail: string,
 	originalProof: string,
+	newPassword?: string,
 ): Promise<EmailChangeRequestNewResponse> {
 	try {
 		logger.debug('Requesting new email code');
 		const response = await http.post<EmailChangeRequestNewResponse>(Endpoints.USER_EMAIL_CHANGE_REQUEST_NEW, {
-			body: requestNewEmailBody(ticket, newEmail, originalProof),
+			body: requestNewEmailBody(ticket, newEmail, originalProof, newPassword),
 		});
 		return response.body;
 	} catch (error) {
@@ -403,20 +321,6 @@ export async function verifyEmailChangeNew(
 		return response.body;
 	} catch (error) {
 		logger.error('Failed to verify new email code', error);
-		throw error;
-	}
-}
-
-export async function applyEmailChange(emailToken: string): Promise<
-	UserPrivate & {
-		token?: string;
-	}
-> {
-	try {
-		logger.debug('Applying verified email change');
-		return await requestEmailApply(emailToken);
-	} catch (error) {
-		logger.error('Failed to apply email change', error);
 		throw error;
 	}
 }
@@ -547,6 +451,23 @@ export async function registerWebAuthnCredential(
 		Sudo.clearToken();
 	} catch (error) {
 		logger.error('Failed to register WebAuthn credential', error);
+		throw error;
+	}
+}
+
+export async function setWebAuthnTwoFactor(enabled: boolean): Promise<Array<BackupCode> | null> {
+	try {
+		logger.debug('Updating the passkey two-factor preference');
+		const response = await http.put<WebAuthnTwoFactorResponse>(Endpoints.USER_MFA_WEBAUTHN_TWO_FACTOR, {
+			body: {enabled},
+		});
+		const {user, backup_codes: backupCodes} = response.body;
+		Users.handleUserUpdate(user);
+		logger.info('Passkey two-factor preference updated');
+		Sudo.clearToken();
+		return backupCodes ?? null;
+	} catch (error) {
+		logger.error('Failed to update the passkey two-factor preference', error);
 		throw error;
 	}
 }

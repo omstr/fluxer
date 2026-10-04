@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {createGuildID, type UserID} from '@app/api/BrandedTypes';
+import {stripAvatarForUser, stripBannerForUser} from '@app/api/infrastructure/AssetEntitlementUtils';
+import type {GuildChannelOverride} from '@app/api/models/GuildChannelOverride';
+import type {GuildMember} from '@app/api/models/GuildMember';
+import type {MuteConfiguration} from '@app/api/models/MuteConfiguration';
+import type {Relationship} from '@app/api/models/Relationship';
+import type {User} from '@app/api/models/User';
+import type {UserGuildSettings} from '@app/api/models/UserGuildSettings';
+import type {UserSettings} from '@app/api/models/UserSettings';
+import type {WebAuthnCredential} from '@app/api/models/WebAuthnCredential';
+import {isAccountLimited} from '@app/api/user/AccountLimit';
+import {canUserAccessNsfwContent} from '@app/api/utils/AgeUtils';
 import type {ChannelMessageNotifications} from '@fluxer/constants/src/NotificationConstants';
 import {
 	DEFAULT_GUILD_FOLDER_ICON,
@@ -15,6 +27,7 @@ import {
 	UserFlags,
 	UserPremiumTypes,
 } from '@fluxer/constants/src/UserConstants';
+import type {WebAuthnCredentialResponse} from '@fluxer/schema/src/domains/auth/AuthSchemas';
 import type {
 	RelationshipResponse,
 	UserGuildSettingsResponse,
@@ -23,17 +36,6 @@ import type {
 	UserProfileResponse,
 	UserSettingsResponse,
 } from '@fluxer/schema/src/domains/user/UserResponseSchemas';
-import {createGuildID, type UserID} from '../BrandedTypes';
-import {stripAvatarForUser, stripBannerForUser} from '../infrastructure/AssetEntitlementUtils';
-import type {GuildChannelOverride} from '../models/GuildChannelOverride';
-import type {GuildMember} from '../models/GuildMember';
-import type {MuteConfiguration} from '../models/MuteConfiguration';
-import type {Relationship} from '../models/Relationship';
-import type {User} from '../models/User';
-import type {UserGuildSettings} from '../models/UserGuildSettings';
-import type {UserSettings} from '../models/UserSettings';
-import {canUserAccessNsfwContent} from '../utils/AgeUtils';
-import {canUseProfileTimezone, getRequiredActions} from './UserHelpers';
 
 const PUBLIC_USER_FLAGS_WITHOUT_STAFF = PUBLIC_USER_FLAGS & ~UserFlags.STAFF;
 
@@ -119,7 +121,6 @@ export function mapUserToPrivateResponse(user: User): UserPrivateResponse {
 	const isStaff = (user.flags & UserFlags.STAFF) !== 0n;
 	const partialResponse = mapUserToPartialResponse(user);
 	const isActuallyPremium = user.isPremium();
-	const includeProfileTimezone = canUseProfileTimezone(user);
 	const traitSet = new Set<string>();
 	for (const trait of user.traits ?? []) {
 		if (trait && trait !== 'premium') {
@@ -129,7 +130,6 @@ export function mapUserToPrivateResponse(user: User): UserPrivateResponse {
 	if (isActuallyPremium) {
 		traitSet.add('premium');
 	}
-	const requiredActions = [...getRequiredActions(user)];
 	const traits = Array.from(traitSet).sort();
 	const authenticatorTypes = getActiveAuthenticatorTypes(user);
 	return {
@@ -140,21 +140,16 @@ export function mapUserToPrivateResponse(user: User): UserPrivateResponse {
 		traits,
 		email: user.email ?? null,
 		email_bounced: user.emailBounced,
-		phone: null,
-		has_verified_phone: user.hasVerifiedPhone,
+		has_verified_phone: false,
 		bio: user.bio,
 		pronouns: user.pronouns,
 		accent_color: user.accentColor,
-		...(includeProfileTimezone
-			? {
-					timezone: user.timezone,
-					timezone_privacy_flags: user.timezonePrivacyFlags,
-				}
-			: {}),
+		timezone: user.timezone,
+		timezone_privacy_flags: user.timezonePrivacyFlags,
 		banner: stripBannerForUser(user),
 		banner_color: user.bannerColor,
 		mfa_enabled: authenticatorTypes.length > 0,
-		authenticator_types: authenticatorTypes.length > 0 ? authenticatorTypes : undefined,
+		authenticator_types: authenticatorTypes,
 		verified: user.emailVerified,
 		premium_type: isActuallyPremium ? (user.premiumType ?? UserPremiumTypes.NONE) : UserPremiumTypes.NONE,
 		premium_since: isActuallyPremium ? (user.premiumSince?.toISOString() ?? null) : null,
@@ -173,7 +168,8 @@ export function mapUserToPrivateResponse(user: User): UserPrivateResponse {
 		premium_perks_disabled: !!(user.premiumFlags & PremiumFlags.PERKS_DISABLED),
 		password_last_changed_at: user.passwordLastChangedAt?.toISOString() ?? null,
 		last_voice_activity_sharing_change_at: user.lastVoiceActivitySharingChangeAt?.toISOString() ?? null,
-		required_actions: requiredActions,
+		required_actions: [],
+		account_limited: isAccountLimited(user),
 		nsfw_allowed: canUserAccessNsfwContent(user),
 		has_dismissed_premium_onboarding: isActuallyPremium && user.premiumOnboardingDismissedAt != null,
 		has_ever_purchased: user.hasEverPurchased,
@@ -234,7 +230,6 @@ export function mapUserToOAuthResponse(
 		global_name: user.globalName ?? null,
 		bot: user.isBot || false,
 		system: user.isSystem || false,
-		acls: Array.from(user.acls),
 		avatar_color: user.avatarColor,
 	};
 }
@@ -419,5 +414,18 @@ export function mapUserGuildSettingsToResponse(settings: UserGuildSettings): Use
 			: null,
 		unread_badges: settings.unreadBadges ?? null,
 		version: settings.version,
+	};
+}
+
+export function mapWebAuthnCredentialToResponse(
+	credential: WebAuthnCredential,
+	legacyRpId: string,
+): WebAuthnCredentialResponse {
+	return {
+		id: credential.credentialId,
+		name: credential.name,
+		created_at: credential.createdAt.toISOString(),
+		last_used_at: credential.lastUsedAt?.toISOString() ?? null,
+		rp_id: credential.rpId ?? legacyRpId,
 	};
 }

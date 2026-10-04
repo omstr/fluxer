@@ -11,14 +11,16 @@ import {
 	SUPPORT_EMAIL,
 	UPI_PAYMENT_METHOD,
 } from '@app/features/app/config/I18nDisplayConstants';
+import RuntimeConfig from '@app/features/app/state/RuntimeConfig';
 import {CANCEL_DESCRIPTOR, CLOSE_DESCRIPTOR, OKAY_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
 import {HttpError} from '@app/features/platform/types/EndpointError';
 import {Logger} from '@app/features/platform/utils/AppLogger';
 import type {CheckoutPaymentMethod, PriceIds} from '@app/features/premium/commands/PremiumCommands';
 import * as PremiumCommands from '@app/features/premium/commands/PremiumCommands';
+import PremiumState from '@app/features/premium/state/PremiumState';
 import {recordPremiumCheckoutReturnIntent} from '@app/features/premium/utils/PremiumCheckoutReturnIntent';
 import {MANAGE_SUBSCRIPTION_DESCRIPTOR} from '@app/features/premium/utils/PremiumMessageDescriptors';
-import type {PricingMode} from '@app/features/premium/utils/PricingUtils';
+import {getStoreName} from '@app/features/premium/utils/PremiumUtils';
 import * as ModalCommands from '@app/features/ui/commands/ModalCommands';
 import {modal} from '@app/features/ui/commands/ModalCommands';
 import {openExternalUrl} from '@app/features/ui/utils/NativeUtils';
@@ -37,7 +39,7 @@ const CUSTOMER_PORTAL_OPEN_FAILED_BODY_DESCRIPTOR = msg({
 });
 const PIX_PAYMENT_PROMPT_DESCRIPTION_DESCRIPTOR = msg({
 	message:
-		"Pay with {pixPaymentMethod} automático to authorize recurring charges directly from your Brazilian bank. Or choose use card to enter a credit card on {paymentProviderName}'s next screen.",
+		'Pay with {pixPaymentMethod} Automático to authorize recurring charges directly from your Brazilian bank. Or choose "Use card" to enter a credit card on {paymentProviderName}\'s next screen.',
 	comment:
 		'Plutonium subscription payment method picker description for Brazil. Explains Pix recurring vs falling back to a card.',
 });
@@ -47,7 +49,7 @@ const USE_PIX_BUTTON_DESCRIPTOR = msg({
 });
 const UPI_PAYMENT_PROMPT_DESCRIPTION_DESCRIPTOR = msg({
 	message:
-		"Pay with {upiPaymentMethod} to set up an RBI-compliant e-mandate from your Indian bank. Or choose use card to enter a credit card on {paymentProviderName}'s next screen.",
+		'Pay with {upiPaymentMethod} to set up an RBI-compliant e-mandate from your Indian bank. Or choose "Use card" to enter a credit card on {paymentProviderName}\'s next screen.',
 	comment:
 		'Plutonium subscription payment method picker description for India. Explains UPI e-mandate vs falling back to a card.',
 });
@@ -133,6 +135,12 @@ const EXISTING_SUBSCRIPTION_BODY_DESCRIPTOR = msg({
 	comment:
 		'Modal body for existing-subscription block. Directs the user to the billing portal and addresses the just-paid race case. Keep plain and reassuring.',
 });
+const EXISTING_STORE_SUBSCRIPTION_BODY_DESCRIPTOR = msg({
+	message:
+		'Your {premiumProductFullName} subscription is billed through {storeName}. Manage it in your {storeName} account to change your plan or check renewal status.',
+	comment:
+		'Modal body for existing-subscription block when the subscription was bought in a mobile app store. {storeName} is the store brand name, App Store or Google Play, and must not be translated. {premiumProductFullName} is the full premium product name.',
+});
 const PURCHASES_DISABLED_TITLE_DESCRIPTOR = msg({
 	message: 'Purchases unavailable',
 	comment: 'Modal title shown when purchases are disabled on this account (server-side enforcement).',
@@ -141,6 +149,10 @@ const PURCHASES_DISABLED_BODY_DESCRIPTOR = msg({
 	message: 'Purchases are disabled for this account. Contact {supportEmail} if this looks wrong.',
 	comment: 'Modal body shown when purchases are disabled. Provides the support email for appeals.',
 });
+const PURCHASES_DISABLED_SELF_HOSTED_BODY_DESCRIPTOR = msg({
+	message: 'Purchases are disabled for this account.',
+	comment: 'Modal body shown on a self-hosted instance when purchases are disabled for the account.',
+});
 const CHECKOUT_BLOCKED_TITLE_DESCRIPTOR = msg({
 	message: 'Checkout unavailable',
 	comment: 'Modal title for the generic "checkout blocked" state when no more specific reason is known.',
@@ -148,6 +160,10 @@ const CHECKOUT_BLOCKED_TITLE_DESCRIPTOR = msg({
 const CHECKOUT_BLOCKED_BODY_DESCRIPTOR = msg({
 	message: 'Checkout is blocked for this account. Contact {supportEmail} if you need help.',
 	comment: 'Modal body for the generic "checkout blocked" state. Provides the support email.',
+});
+const CHECKOUT_BLOCKED_SELF_HOSTED_BODY_DESCRIPTOR = msg({
+	message: 'Checkout is blocked for this account.',
+	comment: 'Modal body for the generic "checkout blocked" state on a self-hosted instance.',
 });
 const CHECKOUT_START_FAILED_TITLE_DESCRIPTOR = msg({
 	message: "Couldn't start checkout",
@@ -181,7 +197,7 @@ const COMPLETE_PAYMENT_MODAL_TITLE_DESCRIPTOR = msg({
 });
 const VERIFY_CARD_MODAL_BODY_DESCRIPTOR = msg({
 	message:
-		"{paymentProviderName} will first verify that your card is eligible for localized pricing, then continue you to payment. Return to {productName} once you've completed it.",
+		"{paymentProviderName} will first verify that your card is eligible for localized pricing, then take you to payment. Return to {productName} once you've completed it.",
 	comment: 'Modal body for the mobile card verification confirmation. Explains the two-step flow and the return path.',
 });
 const COMPLETE_PAYMENT_MODAL_BODY_DESCRIPTOR = msg({
@@ -211,6 +227,17 @@ type Plan = 'monthly' | 'yearly' | 'gift_1_month' | 'gift_1_year';
 type CheckoutPromptKind = 'payment' | 'localized_card_preapproval';
 type PremiumPurchaseBlockedReason = 'lifetime' | 'existing_subscription' | 'purchase_disabled';
 
+function getPremiumPurchaseBlockedStoreProvider(body: unknown): 'app_store' | 'google_play' | null {
+	if (!body || typeof body !== 'object' || !('provider' in body)) {
+		return null;
+	}
+	const provider = body.provider;
+	if (provider === 'app_store' || provider === 'google_play') {
+		return provider;
+	}
+	return null;
+}
+
 function getPremiumPurchaseBlockedReason(body: unknown): PremiumPurchaseBlockedReason | null {
 	if (!body || typeof body !== 'object' || !('reason' in body)) {
 		return null;
@@ -235,7 +262,7 @@ function alternativePaymentMethodForCurrency(
 	isGift: boolean,
 	plan: Plan,
 ): CheckoutPaymentMethod | null {
-	if (isGift || (plan !== 'monthly' && plan !== 'yearly')) {
+	if (isGift || (plan !== 'monthly' && plan !== 'yearly') || RuntimeConfig.isSelfHosted()) {
 		return null;
 	}
 	if (currency === 'BRL') return 'pix';
@@ -246,7 +273,6 @@ function alternativePaymentMethodForCurrency(
 export const useCheckoutActions = (
 	priceIds: PriceIds | null,
 	countryCode: string | null,
-	pricingMode: PricingMode,
 	isGiftSubscription: boolean,
 	mobileEnabled: boolean,
 ) => {
@@ -383,6 +409,38 @@ export const useCheckoutActions = (
 							);
 							return;
 						}
+						const storeProvider = getPremiumPurchaseBlockedStoreProvider(body);
+						if (reason === 'existing_subscription' && storeProvider) {
+							const store = PremiumState.state?.store;
+							const manageUrl = store?.provider === storeProvider ? store.manage_url : null;
+							const description = i18n._(EXISTING_STORE_SUBSCRIPTION_BODY_DESCRIPTOR, {
+								premiumProductFullName: PREMIUM_PRODUCT_FULL_NAME,
+								storeName: getStoreName(storeProvider),
+							});
+							ModalCommands.push(
+								modal(() =>
+									manageUrl ? (
+										<ConfirmModal
+											title={i18n._(EXISTING_SUBSCRIPTION_TITLE_DESCRIPTOR)}
+											description={description}
+											primaryText={i18n._(MANAGE_SUBSCRIPTION_DESCRIPTOR)}
+											primaryVariant="primary"
+											secondaryText={i18n._(CLOSE_DESCRIPTOR)}
+											onPrimary={() => void openExternalUrl(manageUrl)}
+											data-flx="app.plutonium.use-checkout-actions.handle-checkout-error.confirm-modal--5"
+										/>
+									) : (
+										<ConfirmModal
+											title={i18n._(EXISTING_SUBSCRIPTION_TITLE_DESCRIPTOR)}
+											description={description}
+											secondaryText={i18n._(CLOSE_DESCRIPTOR)}
+											data-flx="app.plutonium.use-checkout-actions.handle-checkout-error.confirm-modal--5"
+										/>
+									),
+								),
+							);
+							return;
+						}
 						if (reason === 'existing_subscription') {
 							ModalCommands.push(
 								modal(() => (
@@ -406,9 +464,11 @@ export const useCheckoutActions = (
 								modal(() => (
 									<ConfirmModal
 										title={i18n._(PURCHASES_DISABLED_TITLE_DESCRIPTOR)}
-										description={i18n._(PURCHASES_DISABLED_BODY_DESCRIPTOR, {
-											supportEmail: SUPPORT_EMAIL,
-										})}
+										description={
+											RuntimeConfig.isSelfHosted()
+												? i18n._(PURCHASES_DISABLED_SELF_HOSTED_BODY_DESCRIPTOR)
+												: i18n._(PURCHASES_DISABLED_BODY_DESCRIPTOR, {supportEmail: SUPPORT_EMAIL})
+										}
 										secondaryText={i18n._(CLOSE_DESCRIPTOR)}
 										data-flx="app.plutonium.use-checkout-actions.handle-checkout-error.confirm-modal--3"
 									/>
@@ -420,9 +480,11 @@ export const useCheckoutActions = (
 							modal(() => (
 								<ConfirmModal
 									title={i18n._(CHECKOUT_BLOCKED_TITLE_DESCRIPTOR)}
-									description={i18n._(CHECKOUT_BLOCKED_BODY_DESCRIPTOR, {
-										supportEmail: SUPPORT_EMAIL,
-									})}
+									description={
+										RuntimeConfig.isSelfHosted()
+											? i18n._(CHECKOUT_BLOCKED_SELF_HOSTED_BODY_DESCRIPTOR)
+											: i18n._(CHECKOUT_BLOCKED_BODY_DESCRIPTOR, {supportEmail: SUPPORT_EMAIL})
+									}
 									secondaryText={i18n._(CLOSE_DESCRIPTOR)}
 									data-flx="app.plutonium.use-checkout-actions.handle-checkout-error.confirm-modal--4"
 								/>
@@ -552,7 +614,6 @@ export const useCheckoutActions = (
 						priceId,
 						countryCode ?? undefined,
 						isGift,
-						pricingMode,
 						paymentMethod,
 					);
 					await openCheckoutUrl(checkoutUrl, {promptKind: 'payment', skipMobilePrompt});
@@ -572,11 +633,7 @@ export const useCheckoutActions = (
 				}
 				setLoadingCheckout(true);
 				try {
-					const checkoutUrl = await PremiumCommands.createLocalizedCardPreapprovalSession(
-						priceId,
-						countryCode,
-						pricingMode,
-					);
+					const checkoutUrl = await PremiumCommands.createLocalizedCardPreapprovalSession(priceId, countryCode);
 					await openCheckoutUrl(checkoutUrl, {
 						promptKind: 'localized_card_preapproval',
 						skipMobilePrompt,
@@ -641,7 +698,6 @@ export const useCheckoutActions = (
 			getAlternativePaymentMethodPrompt,
 			isGiftSubscription,
 			mobileEnabled,
-			pricingMode,
 			i18n,
 		],
 	);

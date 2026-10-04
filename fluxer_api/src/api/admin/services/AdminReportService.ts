@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
-import type {SearchReportsRequest} from '@fluxer/schema/src/domains/admin/AdminSchemas';
-import type {MessageResponse} from '@fluxer/schema/src/domains/message/MessageResponseSchemas';
-import {getEmailTemplate} from '@pkgs/email/src/email_i18n/EmailI18n';
-import {seconds} from 'itty-time';
-import type {ApiContext} from '../../ApiContext';
+import type {ApiContext} from '@app/api/ApiContext';
+import type {AdminAuditService} from '@app/api/admin/services/AdminAuditService';
+import {trySendAdminNotification} from '@app/api/admin/services/AdminNotification';
 import {
 	type ChannelID,
 	createReportID,
@@ -13,33 +10,38 @@ import {
 	type GuildID,
 	type ReportID,
 	type UserID,
-} from '../../BrandedTypes';
-import {Config} from '../../Config';
-import type {IChannelRepository} from '../../channel/IChannelRepository';
-import type {ChannelService} from '../../channel/services/ChannelService';
-import {makeAttachmentCdnKey} from '../../channel/services/message/MessageHelpers';
+} from '@app/api/BrandedTypes';
+import {Config} from '@app/api/Config';
+import type {IChannelRepository} from '@app/api/channel/IChannelRepository';
+import type {ChannelService} from '@app/api/channel/services/ChannelService';
+import {makeAttachmentCdnKey} from '@app/api/channel/services/message/MessageHelpers';
 import {
 	createMessageResponseDataService,
 	type MessageResponseAccessContext,
 	messageResponseAccessForChannel,
 	messageResponseAccessForGuild,
-} from '../../channel/services/message/MessageResponseDataService';
-import {SYSTEM_USER_ID} from '../../constants/Core';
-import type {NcmecAttachmentStatusResponse, NcmecSubmissionService} from '../../csam/NcmecSubmissionService';
-import type {MessageAttachment} from '../../database/types/MessageTypes';
-import type {IGuildRepositoryAggregate} from '../../guild/repositories/IGuildRepositoryAggregate';
-import type {IStorageService} from '../../infrastructure/IStorageService';
-import type {UserCacheService} from '../../infrastructure/UserCacheService';
-import {Logger} from '../../Logger';
-import type {RequestCache} from '../../middleware/RequestCacheMiddleware';
-import {createRequestCache} from '../../middleware/RequestCacheMiddleware';
-import type {User} from '../../models/User';
-import type {IARMessageContext, IARSubmission} from '../../report/IReportRepository';
-import type {ReportService} from '../../report/ReportService';
-import {getReportSearchService} from '../../SearchFactory';
-import type {UserChannelService} from '../../user/services/UserChannelService';
-import {assertSafeByteSize} from '../../utils/ByteSizeUtils';
-import type {AdminAuditService} from './AdminAuditService';
+} from '@app/api/channel/services/message/MessageResponseDataService';
+import {SYSTEM_USER_ID} from '@app/api/constants/Core';
+import type {NcmecAttachmentStatusResponse, NcmecSubmissionService} from '@app/api/csam/NcmecSubmissionService';
+import type {MessageAttachment} from '@app/api/database/types/MessageTypes';
+import type {IGuildRepositoryAggregate} from '@app/api/guild/repositories/IGuildRepositoryAggregate';
+import type {IStorageService} from '@app/api/infrastructure/IStorageService';
+import type {UserCacheService} from '@app/api/infrastructure/UserCacheService';
+import {Logger} from '@app/api/Logger';
+import type {RequestCache} from '@app/api/middleware/RequestCacheMiddleware';
+import {createRequestCache} from '@app/api/middleware/RequestCacheMiddleware';
+import type {User} from '@app/api/models/User';
+import type {IARMessageContext, IARSubmission} from '@app/api/report/IReportRepository';
+import type {ReportService} from '@app/api/report/ReportService';
+import {getReportSearchService} from '@app/api/SearchFactory';
+import type {UserChannelService} from '@app/api/user/services/UserChannelService';
+import {assertSafeByteSize} from '@app/api/utils/ByteSizeUtils';
+import {AdminACLs} from '@fluxer/constants/src/AdminACLs';
+import {FeatureTemporarilyDisabledError} from '@fluxer/errors/src/domains/core/FeatureTemporarilyDisabledError';
+import type {SearchReportsRequest} from '@fluxer/schema/src/domains/admin/AdminSchemas';
+import type {MessageResponse} from '@fluxer/schema/src/domains/message/MessageResponseSchemas';
+import {getEmailTemplate} from '@pkgs/email/src/email_i18n/EmailI18n';
+import {seconds} from 'itty-time';
 
 interface AdminReportServiceDeps {
 	apiContext: ApiContext;
@@ -73,7 +75,7 @@ export class AdminReportService {
 		const {reportService} = this.deps;
 		const requestedLimit = limit || 50;
 		const currentOffset = offset || 0;
-		const reports = await reportService.listReportsByStatus(status, requestedLimit, currentOffset);
+		const {reports, total} = await reportService.listReportsByStatus(status, requestedLimit, currentOffset);
 		const requestCache = createRequestCache();
 		const reportNsfwLookupCache = createReportNsfwLookupCache();
 		const reportResponses = await Promise.all(
@@ -83,6 +85,9 @@ export class AdminReportService {
 		);
 		return {
 			reports: reportResponses,
+			total,
+			offset: currentOffset,
+			limit: requestedLimit,
 		};
 	}
 
@@ -99,10 +104,37 @@ export class AdminReportService {
 		adminUserId: UserID,
 		publicComment: string | null,
 		auditLogReason: string | null,
+		notifyReporter: boolean,
 	) {
 		const {reportService, auditService} = this.deps;
 		const {users: userRepository, email: emailService} = this.deps.apiContext.services;
 		const resolvedReport = await reportService.resolveReport(reportId, adminUserId, publicComment, auditLogReason);
+		let reporterDmSent = false;
+		let reporterEmailSent = false;
+		const reporter =
+			notifyReporter && resolvedReport.reporterId ? await userRepository.findUnique(resolvedReport.reporterId) : null;
+		if (reporter) {
+			const commentForTemplate = publicComment ?? '';
+			reporterDmSent = await this.sendResolvedReportSystemDm({
+				reporter,
+				reportId,
+				publicComment: commentForTemplate,
+			});
+			const email = reporter.email;
+			if (email) {
+				reporterEmailSent = await trySendAdminNotification(
+					() =>
+						emailService.sendReportResolvedEmail(
+							email,
+							reporter.username,
+							reportId.toString(),
+							commentForTemplate,
+							reporter.locale,
+						),
+					{action: 'resolve_report', targetId: reportId.toString()},
+				);
+			}
+		}
 		await auditService.createAuditLog({
 			adminUserId,
 			targetType: 'report',
@@ -112,28 +144,11 @@ export class AdminReportService {
 			metadata: new Map([
 				['report_id', reportId.toString()],
 				['report_type', resolvedReport.reportType.toString()],
+				['notify_reporter', notifyReporter ? 'true' : 'false'],
+				['reporter_dm_sent', reporterDmSent ? 'true' : 'false'],
+				['reporter_email_sent', reporterEmailSent ? 'true' : 'false'],
 			]),
 		});
-		if (resolvedReport.reporterId) {
-			const reporter = await userRepository.findUnique(resolvedReport.reporterId);
-			if (reporter) {
-				const commentForTemplate = publicComment ?? '';
-				await this.sendResolvedReportSystemDm({
-					reporter,
-					reportId,
-					publicComment: commentForTemplate,
-				});
-				if (reporter.email) {
-					await emailService.sendReportResolvedEmail(
-						reporter.email,
-						reporter.username,
-						reportId.toString(),
-						commentForTemplate,
-						reporter.locale,
-					);
-				}
-			}
-		}
 		return {
 			report_id: resolvedReport.reportId.toString(),
 			status: resolvedReport.status,
@@ -150,16 +165,8 @@ export class AdminReportService {
 		reporter: User;
 		reportId: ReportID;
 		publicComment: string;
-	}): Promise<void> {
+	}): Promise<boolean> {
 		const {users: userRepository} = this.deps.apiContext.services;
-		const systemUser = await userRepository.findUnique(SYSTEM_USER_ID);
-		if (!systemUser) {
-			Logger.warn(
-				{reportId: reportId.toString(), reporterId: reporter.id.toString()},
-				'Skipping report review system DM because system user does not exist',
-			);
-			return;
-		}
 		const template = getEmailTemplate('report_resolved', reporter.locale, {
 			username: reporter.username,
 			reportId: reportId.toString(),
@@ -176,10 +183,11 @@ export class AdminReportService {
 				},
 				'Skipping report review system DM because the email template could not be resolved',
 			);
-			return;
+			return false;
 		}
 		const requestCache = createRequestCache();
 		try {
+			const systemUser = await userRepository.findUniqueAssert(SYSTEM_USER_ID);
 			const dmChannel = await this.deps.userChannelService.ensureDmOpenForBothUsers({
 				userId: systemUser.id,
 				recipientId: reporter.id,
@@ -194,11 +202,13 @@ export class AdminReportService {
 				},
 				requestCache,
 			});
+			return true;
 		} catch (error) {
 			Logger.warn(
 				{reportId: reportId.toString(), reporterId: reporter.id.toString(), error},
 				'Failed to send report review system DM',
 			);
+			return false;
 		} finally {
 			requestCache.clear();
 		}
@@ -207,7 +217,7 @@ export class AdminReportService {
 	async searchReports(data: SearchReportsRequest, acls: ReadonlySet<string>) {
 		const reportSearchService = getReportSearchService();
 		if (!reportSearchService) {
-			throw new Error('Search is not enabled');
+			throw new FeatureTemporarilyDisabledError();
 		}
 		const filters: Record<string, string | number> = {};
 		if (data.reporter_id !== undefined) {

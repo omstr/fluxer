@@ -73,15 +73,11 @@ pub async fn render(
                 .map(|r| r.sessions)
                 .map_err(|error| tracing::warn!(%error, user_id, "admin API request failed: list user sessions"))
                 .unwrap_or_default();
-            let webauthn_credentials = if u.authenticator_types.contains(&2) {
-                client
-                    .list_webauthn_credentials(user_id)
-                    .await
-                    .map_err(|error| tracing::warn!(%error, user_id, "admin API request failed: list webauthn credentials"))
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+            let webauthn_credentials = client
+                .list_webauthn_credentials(user_id)
+                .await
+                .map_err(|error| tracing::warn!(%error, user_id, "admin API request failed: list webauthn credentials"))
+                .unwrap_or_default();
             Some(tabs::account::account_tab(
                 config,
                 &u,
@@ -115,11 +111,47 @@ pub async fn render(
                 query.delete_all_messages_channel_count.unwrap_or(0),
                 query.delete_all_messages_message_count.unwrap_or(0),
             ));
+            let deletion_scheduler = match u.deletion_scheduled_by.as_deref() {
+                Some(scheduler_id) if u.pending_deletion_at.is_some() && scheduler_id != u.id => {
+                    client
+                        .get_user_by_id(scheduler_id)
+                        .await
+                        .log_error("load deletion scheduler")
+                }
+                _ => None,
+            };
+            let ban_logs = if u.temp_banned_until.is_some()
+                && acl::has_permission(admin_acls, acl::AUDIT_LOG_VIEW)
+            {
+                client
+                    .search_audit_logs(&SearchAuditLogsParams {
+                        query: None,
+                        admin_user_id: None,
+                        target_id: Some(user_id.to_owned()),
+                        target_type: Some("user".to_owned()),
+                        access: Some("write".to_owned()),
+                        sort_by: Some("created_at".to_owned()),
+                        sort_order: Some("desc".to_owned()),
+                        limit: 100,
+                        offset: 0,
+                    })
+                    .await
+                    .log_error("load ban audit logs")
+                    .map(|response| response.logs)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let context = tabs::moderation::ModerationContext {
+                deletion_scheduler: deletion_scheduler.as_ref(),
+                current_ban: tabs::moderation::find_current_ban(&u, &ban_logs),
+            };
             Some(tabs::moderation::moderation_tab(
                 config,
                 &u,
                 csrf_token,
                 admin_acls,
+                &context,
                 query.message_shred_job_id.as_deref(),
                 message_shred_status.as_ref(),
                 delete_all_messages_dry_run,
@@ -155,44 +187,6 @@ pub async fn render(
                 csrf_token,
             ))
         }
-        "billing" => {
-            if config.self_hosted
-                || !acl::has_any_permission(
-                    admin_acls,
-                    &[
-                        acl::BILLING_VIEW,
-                        acl::BILLING_REFUND,
-                        acl::BILLING_MANAGE_SUBSCRIPTION,
-                    ],
-                )
-            {
-                return None;
-            }
-            let can_view_billing = acl::has_permission(admin_acls, acl::BILLING_VIEW);
-            let b = if can_view_billing {
-                client
-                    .get_billing_overview(user_id)
-                    .await
-                    .log_error("load user billing overview")
-            } else {
-                None
-            };
-            let invoices = if can_view_billing {
-                client
-                    .get_user_invoices(user_id, 25, None)
-                    .await
-                    .log_error("load user invoices")
-            } else {
-                None
-            };
-            Some(tabs::billing::billing_tab(
-                config,
-                user_id,
-                b.as_ref().map(|v| &v.data),
-                invoices.as_ref().map(|v| &v.data),
-                csrf_token,
-            ))
-        }
         "guilds" => {
             let g = client
                 .get_user_guilds(user_id, Some(200), None, None, Some(true))
@@ -202,25 +196,29 @@ pub async fn render(
             Some(tabs::guilds::guilds_tab(config, user_id, &g))
         }
         "reports" => {
-            let lim = query.reports_limit.unwrap_or(25);
-            let sp = query.reports_sent_page.unwrap_or(0);
-            let rp = query.reports_received_page.unwrap_or(0);
+            let limit = query.reports_limit.unwrap_or(25);
+            let sent_page = query.reports_sent_page.unwrap_or(0);
+            let received_page = query.reports_received_page.unwrap_or(0);
             let sent = client
-                .search_reports_by_reporter(user_id, lim, sp * lim)
+                .search_reports_by_reporter(user_id, limit, u64::from(sent_page) * u64::from(limit))
                 .await
                 .log_error("load reports sent by user");
-            let recv = client
-                .search_reports_by_reported_user(user_id, lim, rp * lim)
+            let received = client
+                .search_reports_by_reported_user(
+                    user_id,
+                    limit,
+                    u64::from(received_page) * u64::from(limit),
+                )
                 .await
                 .log_error("load reports against user");
             Some(tabs::reports::reports_tab(
                 config,
                 user_id,
                 sent.as_ref(),
-                recv.as_ref(),
-                sp,
-                rp,
-                lim,
+                received.as_ref(),
+                sent_page,
+                received_page,
+                limit,
             ))
         }
         "relationships" => {
@@ -278,11 +276,12 @@ pub async fn render(
                     query: None,
                     admin_user_id: None,
                     target_id: Some(user_id.to_owned()),
-                    target_type: Some("user".to_owned()),
+                    target_type: None,
+                    access: Some("write".to_owned()),
                     sort_by: Some("created_at".to_owned()),
                     sort_order: Some("desc".to_owned()),
                     limit,
-                    offset: page * limit,
+                    offset: u64::from(page) * u64::from(limit),
                 })
                 .await
                 .log_error("load user admin audit logs")?;

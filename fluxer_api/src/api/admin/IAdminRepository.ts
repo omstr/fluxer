@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import type {UserID} from '../BrandedTypes';
+import type {UserID} from '@app/api/BrandedTypes';
 import type {
 	AdminAuditLogRow,
 	BannedAvatarHashRow,
@@ -9,7 +9,7 @@ import type {
 	BannedProfileSubstringScope,
 	BannedUrlDomainRow,
 	BannedUrlRow,
-} from '../database/types/AdminArchiveTypes';
+} from '@app/api/database/types/AdminArchiveTypes';
 
 export interface AdminAuditLog {
 	logId: bigint;
@@ -32,11 +32,6 @@ export interface BannedIpEntry {
 	createdAt: Date | null;
 }
 
-export interface DisposableEmailDomainPage {
-	domains: Array<string>;
-	pageState: string | null;
-}
-
 export abstract class IAdminRepository {
 	abstract createAuditLog(log: AdminAuditLogRow): Promise<AdminAuditLog>;
 
@@ -48,7 +43,7 @@ export abstract class IAdminRepository {
 
 	abstract isIpBanned(ip: string): Promise<boolean>;
 
-	abstract banIp(ip: string): Promise<void>;
+	abstract banIp(ip: string, ttlSeconds?: number | null): Promise<void>;
 
 	abstract banIpTemp(ip: string, ttlSeconds: number): Promise<void>;
 
@@ -62,23 +57,7 @@ export abstract class IAdminRepository {
 
 	abstract unbanEmail(email: string): Promise<void>;
 
-	abstract isEmailDomainSuspicious(domain: string): Promise<boolean>;
-
-	abstract addSuspiciousEmailDomain(domain: string): Promise<void>;
-
-	abstract removeSuspiciousEmailDomain(domain: string): Promise<void>;
-
-	abstract listSuspiciousEmailDomains(limit?: number): Promise<Array<string>>;
-
-	abstract isEmailDomainDisposable(domain: string): Promise<boolean>;
-
-	abstract addDisposableEmailDomain(domain: string): Promise<void>;
-
-	abstract removeDisposableEmailDomain(domain: string): Promise<void>;
-
-	abstract listDisposableEmailDomains(limit?: number): Promise<Array<string>>;
-
-	abstract listDisposableEmailDomainsPage(limit: number, pageState?: string | null): Promise<DisposableEmailDomainPage>;
+	abstract loadAllBannedEmails(): Promise<Array<string>>;
 
 	abstract isPhraseBanned(phrase: string): Promise<boolean>;
 
@@ -87,8 +66,6 @@ export abstract class IAdminRepository {
 	abstract unbanPhrase(phrase: string): Promise<void>;
 
 	abstract loadAllBannedPhrases(): Promise<Array<string>>;
-
-	abstract loadAllBannedPhonePrefixes(): Promise<Array<string>>;
 
 	abstract loadAllBannedIps(): Promise<Set<string>>;
 
@@ -113,6 +90,8 @@ export abstract class IAdminRepository {
 	abstract banFileSha(row: BannedFileShaRow): Promise<void>;
 
 	abstract unbanFileSha(sha256Hex: string): Promise<void>;
+
+	abstract unbanFeedFileSha(sha256Hex: string): Promise<boolean>;
 
 	abstract loadAllBannedFileShas(): Promise<Array<BannedFileShaRow>>;
 

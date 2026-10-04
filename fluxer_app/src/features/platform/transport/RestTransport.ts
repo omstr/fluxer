@@ -15,7 +15,10 @@ import type {
 } from '@app/features/platform/types/TransportTypes';
 import {Logger} from '@app/features/platform/utils/AppLogger';
 import {APIErrorCodes} from '@fluxer/constants/src/ApiErrorCodes';
+import {i18n} from '@lingui/core';
+import {msg} from '@lingui/core/macro';
 
+const TOO_MANY_REQUESTS_DESCRIPTOR = msg({message: 'Too many requests. Try again later.'});
 const log = new Logger('RestClient');
 const RETRY_BACKOFF_BASE_MS = 1000;
 const RETRY_BACKOFF_CAP_MS = 30_000;
@@ -32,12 +35,19 @@ const SUDO_VERIFICATION_ERROR_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 type RestMode = NonNullable<RestRequestOptions['mode']>;
+type PlanOptions = RestRequestOptions & {skipIntercept?: boolean};
 type BodyShape =
 	| {tag: 'empty'}
 	| {tag: 'json'; payload: string}
 	| {tag: 'urlencoded'; payload: string}
 	| {tag: 'form'; payload: FormData}
 	| {tag: 'opaque'; payload: XMLHttpRequestBodyInit};
+
+interface PacingEntry {
+	until: number;
+	note?: string;
+	code?: string;
+}
 
 interface RuntimeState {
 	baseUrl: string;
@@ -46,9 +56,8 @@ interface RuntimeState {
 	defaultRetries: number;
 	authProvider: () => string | null;
 	sudo: SudoBindings | null;
-	prepare?: RestClientHooks['prepareRequest'];
 	globalIntercept?: RestInterceptor;
-	pacing: Map<string, {until: number; note?: string}>;
+	pacing: Map<string, PacingEntry>;
 }
 
 interface Plan {
@@ -66,7 +75,7 @@ interface Plan {
 	sudoApplied: boolean;
 	signal?: AbortSignal;
 	onProgress?: (event: ProgressEvent) => void;
-	options: RestRequestOptions;
+	options: PlanOptions;
 }
 
 type TransportOutcome =
@@ -77,6 +86,65 @@ type AttemptDecision =
 	| {next: 'deliver'; reply: RestResponse}
 	| {next: 'retry-after'; delayMs: number; mode: 'backoff' | 'fixed'}
 	| {next: 'fail'; error: unknown};
+
+interface OnlineWaiter {
+	resolve: () => void;
+	signal: AbortSignal | undefined;
+	onAbort: () => void;
+}
+
+const strippedAuthorizationOrigins = new Set<string>();
+
+const onlineWaiters = new Set<OnlineWaiter>();
+let onlineListenerActive = false;
+
+function createRequestAbortError(): DOMException {
+	return new DOMException('Request aborted', 'AbortError');
+}
+
+function removeOnlineListener(): void {
+	if (!onlineListenerActive) return;
+	window.removeEventListener('online', resolveOnlineWaiters);
+	onlineListenerActive = false;
+}
+
+function releaseOnlineWaiter(waiter: OnlineWaiter): boolean {
+	if (!onlineWaiters.delete(waiter)) return false;
+	waiter.signal?.removeEventListener('abort', waiter.onAbort);
+	if (onlineWaiters.size === 0) removeOnlineListener();
+	return true;
+}
+
+function resolveOnlineWaiters(): void {
+	const pending = Array.from(onlineWaiters);
+	onlineWaiters.clear();
+	removeOnlineListener();
+	for (const waiter of pending) {
+		waiter.signal?.removeEventListener('abort', waiter.onAbort);
+		waiter.resolve();
+	}
+}
+
+function waitUntilOnline(signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) return Promise.reject(createRequestAbortError());
+	if (navigator.onLine) return Promise.resolve();
+	return new Promise<void>((resolve, reject) => {
+		const waiter: OnlineWaiter = {
+			resolve,
+			signal,
+			onAbort: () => {
+				if (releaseOnlineWaiter(waiter)) reject(createRequestAbortError());
+			},
+		};
+		onlineWaiters.add(waiter);
+		if (signal) signal.addEventListener('abort', waiter.onAbort, {once: true});
+		if (!onlineListenerActive) {
+			window.addEventListener('online', resolveOnlineWaiters);
+			onlineListenerActive = true;
+		}
+		if (navigator.onLine) queueMicrotask(resolveOnlineWaiters);
+	});
+}
 
 export class RestClient {
 	private readonly state: RuntimeState = {
@@ -106,8 +174,11 @@ export class RestClient {
 	}
 
 	installHooks(hooks: RestClientHooks): void {
-		this.state.prepare = hooks.prepareRequest;
 		this.state.globalIntercept = hooks.intercept;
+	}
+
+	hasAuthorization(): boolean {
+		return !isOffOrigin(resolveUrl(this.state, '/', undefined));
 	}
 
 	dispatch<T = unknown>(method: HttpMethod, path: string, options: RestRequestOptions = {}): Promise<RestResponse<T>> {
@@ -211,11 +282,12 @@ async function runRetryLoop<T>(
 	state: RuntimeState,
 	method: HttpMethod,
 	path: string,
-	options: RestRequestOptions,
+	options: PlanOptions,
 	sudoApplied: boolean,
 	attempt: number,
 ): Promise<RestResponse<T>> {
 	const plan = composePlan(state, method, path, options, sudoApplied);
+	if (plan.retries > 0) await waitUntilOnline(plan.signal);
 	const pacingHit = consultPacing(state.pacing, plan.rateLimitKey);
 	if (pacingHit) {
 		if (plan.mode === 'auto-retry') {
@@ -229,7 +301,6 @@ async function runRetryLoop<T>(
 		}
 	}
 	const handle = createHandle(plan.signal);
-	state.prepare?.(handle);
 	const outcome = await performTransport(plan, handle);
 	const decision = await reactToOutcome(state, plan, outcome);
 	switch (decision.next) {
@@ -240,7 +311,11 @@ async function runRetryLoop<T>(
 				return finalizeAfterRetriesExhausted<T>(state, plan, outcome);
 			}
 			const wait = decision.mode === 'backoff' ? computeBackoffMs(attempt) : decision.delayMs;
-			await delay(wait, plan.signal);
+			if (outcome.status === 'transport-error' && !navigator.onLine) {
+				await waitUntilOnline(plan.signal);
+			} else {
+				await delay(wait, plan.signal);
+			}
 			return runRetryLoop<T>(state, method, path, options, sudoApplied, attempt + 1);
 		}
 		case 'fail':
@@ -252,12 +327,17 @@ function composePlan(
 	state: RuntimeState,
 	method: HttpMethod,
 	path: string,
-	options: RestRequestOptions,
+	options: PlanOptions,
 	sudoApplied: boolean,
 ): Plan {
 	const url = resolveUrl(state, path, options.query);
 	const body = encodeBody(options);
-	const sameOrigin = !looksAbsolute(path) && !isOffOrigin(url);
+	const targetsApiBase = !looksAbsolute(path);
+	const apiOrigin = targetsApiBase ? originOf(url) : null;
+	const sameOrigin = targetsApiBase && (apiOrigin === null || apiOrigin === window.location.origin);
+	if (apiOrigin !== null && !sameOrigin) {
+		reportStrippedAuthorization(state, apiOrigin, options.auth);
+	}
 	const headers = assembleHeaders({
 		state,
 		callerHeaders: options.headers,
@@ -270,7 +350,7 @@ function composePlan(
 		method,
 		path,
 		url,
-		rateLimitKey: path,
+		rateLimitKey: `${method} ${path}`,
 		body,
 		headers,
 		parse: options.parse ?? 'auto',
@@ -303,12 +383,24 @@ function looksAbsolute(path: string): boolean {
 	return path.startsWith('//') || /^[a-z][a-z0-9+.-]*:\/\//i.test(path);
 }
 
-function isOffOrigin(url: string): boolean {
+function originOf(url: string): string | null {
 	try {
-		return new URL(url).origin !== window.location.origin;
+		return new URL(url).origin;
 	} catch {
-		return false;
+		return null;
 	}
+}
+
+function isOffOrigin(url: string): boolean {
+	const origin = originOf(url);
+	return origin !== null && origin !== window.location.origin;
+}
+
+function reportStrippedAuthorization(state: RuntimeState, apiOrigin: string, auth: RestAuthMode | undefined): void {
+	if (auth === 'none' || strippedAuthorizationOrigins.has(apiOrigin)) return;
+	if (!state.authProvider()) return;
+	strippedAuthorizationOrigins.add(apiOrigin);
+	log.warn(`authorization withheld from off-origin api base: ${apiOrigin} (page ${window.location.origin})`);
 }
 
 function encodeBody(options: RestRequestOptions): BodyShape {
@@ -405,10 +497,7 @@ function inferContentType(body: BodyShape): string | null {
 	}
 }
 
-function consultPacing(
-	pacing: Map<string, {until: number; note?: string}>,
-	key: string,
-): {until: number; note?: string} | null {
+function consultPacing(pacing: Map<string, PacingEntry>, key: string): PacingEntry | null {
 	const entry = pacing.get(key);
 	if (!entry) return null;
 	if (entry.until <= Date.now()) {
@@ -419,11 +508,12 @@ function consultPacing(
 }
 
 function recordPacing(
-	pacing: Map<string, {until: number; note?: string}>,
+	pacing: Map<string, PacingEntry>,
 	key: string,
 	retryAfterSeconds: number | null,
 	headerMs: number | null,
 	note?: string,
+	code?: string,
 ): void {
 	const fallbackMs = 1000;
 	const ms =
@@ -432,19 +522,20 @@ function recordPacing(
 			: retryAfterSeconds !== null && retryAfterSeconds > 0
 				? retryAfterSeconds * 1000
 				: fallbackMs;
-	pacing.set(key, {until: Date.now() + ms, note});
+	pacing.set(key, {until: Date.now() + ms, note, code});
 }
 
-function synthesizePacingReply<T>(_plan: Plan, hit: {until: number; note?: string}): RestResponse<T> {
+function synthesizePacingReply<T>(_plan: Plan, hit: PacingEntry): RestResponse<T> {
 	const remaining = Math.max(0, hit.until - Date.now());
 	const headers: Record<string, string> = {
 		'retry-after': String(Math.ceil(remaining / 1000)),
 		'content-type': 'application/json',
 	};
 	const payload = {
-		message: hit.note ?? 'You are being rate limited.',
+		message: hit.note ?? i18n._(TOO_MANY_REQUESTS_DESCRIPTOR),
 		retry_after: remaining / 1000,
 		global: false,
+		...(hit.code !== undefined ? {code: hit.code} : {}),
 	};
 	return {
 		ok: false,
@@ -567,12 +658,10 @@ async function reactToOutcome(state: RuntimeState, plan: Plan, outcome: Transpor
 	if (reply.status === 429) {
 		return reactToRateLimit(state, plan, reply);
 	}
-	const interceptor = plan.options.intercept ?? state.globalIntercept;
+	const interceptor = plan.options.skipIntercept ? undefined : state.globalIntercept;
 	if (interceptor) {
 		const intercepted = await invokeInterceptor(state, plan, interceptor, reply);
-		if (intercepted.next !== 'passthrough') {
-			return intercepted.decision;
-		}
+		if (intercepted) return intercepted;
 	}
 	if (RETRYABLE_STATUSES.has(reply.status)) {
 		return {next: 'retry-after', delayMs: 0, mode: 'backoff'};
@@ -598,7 +687,8 @@ function reactToRateLimit(state: RuntimeState, plan: Plan, reply: RestResponse):
 	const retryAfterSeconds = readRetryAfter(reply.headers['retry-after']);
 	const headerMs = readNumericHeader(reply.headers['x-ratelimit-reset-after']);
 	const note = extractMessage(reply.body);
-	recordPacing(state.pacing, plan.rateLimitKey, retryAfterSeconds, headerMs, note);
+	const code = extractCode(reply.body);
+	recordPacing(state.pacing, plan.rateLimitKey, retryAfterSeconds, headerMs, note, code);
 	if (plan.mode === 'silent') {
 		return {next: 'deliver', reply};
 	}
@@ -625,67 +715,39 @@ function readNumericHeader(raw: string | undefined): number | null {
 	return Number.isFinite(value) ? value * 1000 : null;
 }
 
+function extractCode(body: unknown): string | undefined {
+	if (typeof body !== 'object' || body === null) return undefined;
+	const c = (body as Record<string, unknown>).code;
+	return typeof c === 'string' ? c : undefined;
+}
+
 function extractMessage(body: unknown): string | undefined {
 	if (typeof body !== 'object' || body === null) return undefined;
 	const m = (body as Record<string, unknown>).message;
 	return typeof m === 'string' ? m : undefined;
 }
 
-type InterceptorFold = {next: 'passthrough'} | {next: 'used'; decision: AttemptDecision};
-
 async function invokeInterceptor(
 	state: RuntimeState,
 	plan: Plan,
 	interceptor: RestInterceptor,
 	reply: RestResponse,
-): Promise<InterceptorFold> {
-	let captured: Error | null = null;
-	let chained: Promise<RestResponse> | null = null;
-	const retry = (extra: Record<string, string>): Promise<RestResponse> => {
-		const augmented: RestRequestOptions = {
-			...plan.options,
-			headers: {...(plan.options.headers ?? {}), ...extra},
-		};
-		chained = runRetryLoop(state, plan.method, plan.path, augmented, plan.sudoApplied, 0);
-		return chained;
-	};
-	const reject = (err: Error) => {
-		captured = err;
-	};
-	let result: boolean | undefined | Promise<RestResponse | undefined>;
+): Promise<AttemptDecision | null> {
+	const retry = (extra: Record<string, string>): Promise<RestResponse> =>
+		runRetryLoop(
+			state,
+			plan.method,
+			plan.path,
+			{...plan.options, headers: {...(plan.options.headers ?? {}), ...extra}, skipIntercept: true},
+			plan.sudoApplied,
+			0,
+		);
 	try {
-		result = interceptor(reply, retry, reject);
+		const finalReply = await interceptor(reply, retry);
+		return finalReply === undefined ? null : {next: 'deliver', reply: finalReply};
 	} catch (err) {
-		return {next: 'used', decision: {next: 'fail', error: err}};
+		return {next: 'fail', error: err};
 	}
-	if (captured) {
-		return {next: 'used', decision: {next: 'fail', error: captured}};
-	}
-	if (result instanceof Promise) {
-		try {
-			const finalReply = await result;
-			if (captured) {
-				return {next: 'used', decision: {next: 'fail', error: captured}};
-			}
-			if (finalReply === undefined && chained) {
-				return {next: 'used', decision: {next: 'deliver', reply: await chained}};
-			}
-			if (finalReply === undefined) {
-				return {next: 'passthrough'};
-			}
-			return {next: 'used', decision: {next: 'deliver', reply: finalReply}};
-		} catch (err) {
-			return {next: 'used', decision: {next: 'fail', error: err}};
-		}
-	}
-	if (result === true && chained) {
-		try {
-			return {next: 'used', decision: {next: 'deliver', reply: await chained}};
-		} catch (err) {
-			return {next: 'used', decision: {next: 'fail', error: err}};
-		}
-	}
-	return {next: 'passthrough'};
 }
 
 function hasContentBlockedCode(body: unknown): boolean {
