@@ -23,11 +23,6 @@ import type {Account} from '@app/features/platform/state/AuthSession';
 import {formatClientBuildInfo, getClientInfo, getClientInfoSync} from '@app/features/platform/utils/ClientInfo';
 import Presence from '@app/features/presence/state/Presence';
 import {remFromPx} from '@app/features/theme/layout/RemFromPx';
-import {
-	getProfileCardBannerFallbackColor,
-	getProfileCardBorderPresentation,
-} from '@app/features/user/utils/ProfileCardBorderUtils';
-import {PROFILE_POPOUT_GEOMETRY_STYLE} from '@app/features/user/constants/UserProfileSurfaceGeometry';
 import {Button} from '@app/features/ui/button/Button';
 import * as ModalCommands from '@app/features/ui/commands/ModalCommands';
 import {modal} from '@app/features/ui/commands/ModalCommands';
@@ -50,6 +45,7 @@ import {ProfileCardContent} from '@app/features/user/components/profile/profile_
 import {ProfileCardFooter} from '@app/features/user/components/profile/profile_card/ProfileCardFooter';
 import {ProfileCardLayout} from '@app/features/user/components/profile/profile_card/ProfileCardLayout';
 import {ProfileCardUserInfo} from '@app/features/user/components/profile/profile_card/ProfileCardUserInfo';
+import {PROFILE_POPOUT_GEOMETRY_STYLE} from '@app/features/user/constants/UserProfileSurfaceGeometry';
 import {useAutoplayExpandedProfileAnimations} from '@app/features/user/hooks/useAutoplayExpandedProfileAnimations';
 import {normalizeCustomStatus} from '@app/features/user/state/CustomStatus';
 import StatusExpiry from '@app/features/user/state/StatusExpiry';
@@ -57,6 +53,10 @@ import UserProfile from '@app/features/user/state/UserProfile';
 import UserSettings from '@app/features/user/state/UserSettings';
 import Users from '@app/features/user/state/Users';
 import * as NicknameUtils from '@app/features/user/utils/NicknameUtils';
+import {
+	getProfileCardBannerFallbackColor,
+	getProfileCardBorderPresentation,
+} from '@app/features/user/utils/ProfileCardBorderUtils';
 import * as ProfileDisplayUtils from '@app/features/user/utils/ProfileDisplayUtils';
 import {createMockProfile} from '@app/features/user/utils/ProfileUtils';
 import {copyVoiceDiagnostics} from '@app/features/voice/commands/VoiceDiagnosticsCommands';

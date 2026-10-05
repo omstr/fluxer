@@ -33,7 +33,8 @@ describe('MemberPresenceSubscription', () => {
 	});
 
 	it('decrements refs when unsubscribe runs after LRU eviction', async () => {
-		store = (await import('@app/features/presence/state/MemberPresenceSubscription')).default as unknown as MemberPresenceSubscriptionInternals;
+		store = (await import('@app/features/presence/state/MemberPresenceSubscription'))
+			.default as unknown as MemberPresenceSubscriptionInternals;
 		store.clearAll();
 
 		const guildId = 'guild-1';

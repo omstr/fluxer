@@ -34,17 +34,17 @@ const ACTIVITY_VISIBILITY_EVERYONE_DESCRIPTOR = msg({
 });
 
 const ACTIVITY_VISIBILITY_EVERYONE_DESCRIPTION = msg({
-	message: 'Activity presence is displayed unrestricted',
+	message: 'Activity presence is displayed to friends and joined communities',
 });
 
-// [OM]
-// const ACTIVITY_VISIBILITY_SMALL_COMMUNITIES_DESCRIPTOR = msg({
-// 	message: 'Small Communities',
-// 	comment: 'Your activity is visible to small communities and friends',
-// });
-// const ACTIVITY_VISIBILITY_SMALL_COMMUNITIES_DESCRIPTION = msg({
-// 	message: 'Your activity is visible to small communities and friends',
-// });
+const ACTIVITY_VISIBILITY_NO_ONE_DESCRIPTOR = msg({
+	message: 'No one',
+	comment:
+		'The users activity is only visible locally, and is therefore not part of the api schema because it does not affect anything on the gateway',
+});
+const ACTIVITY_VISIBILITY_NO_ONE_DESCRIPTION = msg({
+	message: 'Your activity is visible only to yourself',
+});
 
 const ACTIVITY_VISIBILITY_FRIENDS_DESCRIPTOR = msg({
 	message: 'Friends',
@@ -66,15 +66,15 @@ export const ActivityTabContent: React.FC = observer(() => {
 			name: i18n._(ACTIVITY_VISIBILITY_EVERYONE_DESCRIPTOR),
 			desc: i18n._(ACTIVITY_VISIBILITY_EVERYONE_DESCRIPTION),
 		},
-		// { [OM]
-		// 	value: ActivityVisibilityLevels.SMALL_GUILDS_ONLY,
-		// 	name: i18n._(ACTIVITY_VISIBILITY_SMALL_COMMUNITIES_DESCRIPTOR),
-		// 	desc: i18n._(ACTIVITY_VISIBILITY_SMALL_COMMUNITIES_DESCRIPTION),
-		// },
 		{
 			value: ActivityVisibilityLevels.FRIENDS,
 			name: i18n._(ACTIVITY_VISIBILITY_FRIENDS_DESCRIPTOR),
 			desc: i18n._(ACTIVITY_VISIBILITY_FRIENDS_DESCRIPTION),
+		},
+		{
+			value: ActivityVisibilityLevels.NO_ONE,
+			name: i18n._(ACTIVITY_VISIBILITY_NO_ONE_DESCRIPTOR),
+			desc: i18n._(ACTIVITY_VISIBILITY_NO_ONE_DESCRIPTION),
 		},
 	];
 	return (
@@ -86,22 +86,20 @@ export const ActivityTabContent: React.FC = observer(() => {
 				onChange={PresenceCommands.setActivityDetectionEnabled}
 			/>
 
-				<SettingsTabSection
-					title={
-						<span style={{opacity: disabled ? 0.45 : 1, fontWeight: 400, fontSize: '0.85rem'}}>
-							{i18n._(ACTIVITY_VISIBILITY_DESCRIPTOR)}
-						</span>
-					}
-				>
-
-					<RadioGroup
-						options={visibilityOptions}
-						value={activityVisibility}
-						onChange={PresenceCommands.setActivityVisibility}
-						disabled={disabled}
-					/>
-				</SettingsTabSection>
-
+			<SettingsTabSection
+				title={
+					<span style={{opacity: disabled ? 0.45 : 1, fontWeight: 400, fontSize: '0.85rem'}}>
+						{i18n._(ACTIVITY_VISIBILITY_DESCRIPTOR)}
+					</span>
+				}
+			>
+				<RadioGroup
+					options={visibilityOptions}
+					value={activityVisibility}
+					onChange={PresenceCommands.setActivityVisibility}
+					disabled={disabled}
+				/>
+			</SettingsTabSection>
 		</SettingsSection>
 	);
 });

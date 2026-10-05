@@ -2,11 +2,11 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {createRequire} from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
 import {fileURLToPath} from 'node:url';
-import {createRequire} from 'node:module';
+import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const esbuild = require('esbuild');

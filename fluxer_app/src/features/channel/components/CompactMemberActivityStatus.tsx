@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import styles from '@app/features/channel/components/CompactMemberActivityStatus.module.css';
 import {usePresenceActivities} from '@app/features/presence/hooks/usePresenceActivities';
 import {usePresenceCustomStatus} from '@app/features/presence/hooks/usePresenceCustomStatus';
 import {
-	formatActivityMemberListLine,
 	type ActivityMemberListKind,
+	formatActivityMemberListLine,
 } from '@app/features/presence/utils/formatActivityDisplay';
-import styles from '@app/features/channel/components/CompactMemberActivityStatus.module.css';
 import {useTextOverflow} from '@app/features/ui/hooks/useTextOverflow';
 import {Tooltip} from '@app/features/ui/tooltip/Tooltip';
 import type {CustomStatus} from '@app/features/user/state/CustomStatus';
@@ -45,11 +45,7 @@ function ActivityKindIcon({kind}: {kind: ActivityMemberListKind}) {
 	}
 }
 
-export function CompactMemberActivityStatus({
-	className,
-	customStatus,
-	userId,
-}: CompactMemberActivityStatusProps) {
+export function CompactMemberActivityStatus({className, customStatus, userId}: CompactMemberActivityStatusProps) {
 	const {i18n} = useLingui();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const shouldFetchCustomStatus = customStatus === undefined;

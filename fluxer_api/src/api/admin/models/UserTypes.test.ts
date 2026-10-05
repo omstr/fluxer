@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {describe, expect, test, vi} from 'vitest';
 import {BadGatewayError} from '@fluxer/errors/src/domains/core/BadGatewayError';
 import {GatewayTimeoutError} from '@fluxer/errors/src/domains/core/GatewayTimeoutError';
 import {ServiceUnavailableError} from '@fluxer/errors/src/domains/core/ServiceUnavailableError';
+import {describe, expect, test, vi} from 'vitest';
 import {createUserID} from '../../BrandedTypes';
 import type {User} from '../../models/User';
 import {mapUserToAdminResponse} from './UserTypes';
@@ -51,17 +51,12 @@ function createStubUser(): User {
 
 describe('mapUserToAdminResponse', () => {
 	test('includes the current activity payloads from the gateway service', async () => {
-		const response = await mapUserToAdminResponse(
-			createStubUser(),
-			undefined,
-			undefined,
-				{
-					getCurrentActivities: async () => [
-						{name: 'Test Activity', type: 0, details: 'Queueing'},
-						{name: 'Tauon', type: 2, details: 'Track'},
-					],
-				} as never,
-			);
+		const response = await mapUserToAdminResponse(createStubUser(), undefined, undefined, {
+			getCurrentActivities: async () => [
+				{name: 'Test Activity', type: 0, details: 'Queueing'},
+				{name: 'Tauon', type: 2, details: 'Track'},
+			],
+		} as never);
 
 		expect(response.activities).toEqual([
 			{name: 'Test Activity', type: 0, details: 'Queueing'},
@@ -70,14 +65,9 @@ describe('mapUserToAdminResponse', () => {
 	});
 
 	test('falls back to an empty list when the gateway has no visible activity', async () => {
-		const response = await mapUserToAdminResponse(
-			createStubUser(),
-			undefined,
-			undefined,
-			{
-				getCurrentActivities: async () => [],
-			} as never,
-		);
+		const response = await mapUserToAdminResponse(createStubUser(), undefined, undefined, {
+			getCurrentActivities: async () => [],
+		} as never);
 
 		expect(response.activities).toEqual([]);
 	});
@@ -85,16 +75,11 @@ describe('mapUserToAdminResponse', () => {
 	test.each([new GatewayTimeoutError(), new BadGatewayError(), new ServiceUnavailableError()])(
 		'falls back to an empty list when gateway activity lookup fails with %s',
 		async (error) => {
-			const response = await mapUserToAdminResponse(
-				createStubUser(),
-				undefined,
-				undefined,
-				{
-					getCurrentActivities: async () => {
-						throw error;
-					},
-				} as never,
-			);
+			const response = await mapUserToAdminResponse(createStubUser(), undefined, undefined, {
+				getCurrentActivities: async () => {
+					throw error;
+				},
+			} as never);
 
 			expect(response.activities).toEqual([]);
 		},
@@ -102,16 +87,11 @@ describe('mapUserToAdminResponse', () => {
 
 	test('rethrows unexpected gateway errors', async () => {
 		await expect(
-			mapUserToAdminResponse(
-				createStubUser(),
-				undefined,
-				undefined,
-				{
-					getCurrentActivities: async () => {
-						throw new Error('boom');
-					},
-				} as never,
-			),
+			mapUserToAdminResponse(createStubUser(), undefined, undefined, {
+				getCurrentActivities: async () => {
+					throw new Error('boom');
+				},
+			} as never),
 		).rejects.toThrow('boom');
 	});
 

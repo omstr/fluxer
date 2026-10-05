@@ -298,7 +298,12 @@ export class AdminUserDeletionService {
 		auditLogReason: string | null,
 		acls: ReadonlySet<string>,
 	) {
-		const {users: userRepository, email: emailService, cache: cacheService, gateway: gatewayService} = this.deps.apiContext.services;
+		const {
+			users: userRepository,
+			email: emailService,
+			cache: cacheService,
+			gateway: gatewayService,
+		} = this.deps.apiContext.services;
 		const {auditService, updatePropagator} = this.deps;
 		const userId = createUserID(data.user_id);
 		const user = await userRepository.findUnique(userId);

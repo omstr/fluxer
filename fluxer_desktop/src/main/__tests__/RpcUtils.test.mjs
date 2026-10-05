@@ -18,6 +18,9 @@ assert.equal(
 	'Strawberry',
 );
 assert.equal(resolveListeningActivityName('Spotify', 'Spotify', 'Artist - Song', 'Artist', 2), 'Spotify');
-assert.equal(resolveListeningActivityName('Spotify', 'Hybrid Theory', 'Linkin Park - In the End', 'Linkin Park', 2), 'Hybrid Theory');
+assert.equal(
+	resolveListeningActivityName('Spotify', 'Hybrid Theory', 'Linkin Park - In the End', 'Linkin Park', 2),
+	'Hybrid Theory',
+);
 
 console.log('RpcUtils test passed');

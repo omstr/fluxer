@@ -310,6 +310,7 @@ export const ProfileFieldPrivacyFlagsDescriptions: Record<keyof typeof ProfileFi
 export const ActivityVisibilityLevels = {
 	EVERYONE: 0,
 	FRIENDS: 1,
+	NO_ONE: 2,
 } as const;
 
 export type ActivityVisibilityLevel = (typeof ActivityVisibilityLevels)[keyof typeof ActivityVisibilityLevels];
@@ -317,6 +318,7 @@ export type ActivityVisibilityLevel = (typeof ActivityVisibilityLevels)[keyof ty
 export const ActivityVisibilityLevelsDescriptions: Record<keyof typeof ActivityVisibilityLevels, string> = {
 	EVERYONE: 'Activity visible to friends and members of any shared guild',
 	FRIENDS: 'Activity visible only to friends',
+	NO_ONE: 'Activity only visible to the local user',
 };
 
 export const SMALL_GUILD_MEMBER_THRESHOLD = 200;

@@ -2,10 +2,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import {app} from 'electron';
-import log from 'electron-log';
 import {EXECUTABLE_EXACT_MATCH_PREFIX} from '@electron/main/rpc/RpcConstants';
 import type {DetectableApp, DetectableExecutable} from '@electron/main/rpc/RpcTypes';
+import {app} from 'electron';
+import log from 'electron-log';
 
 interface ResolvedApplication {
 	id: string;
@@ -30,20 +30,14 @@ let loaded = false;
 let syncPromise: Promise<void> | null = null;
 
 function hasDetectablesJson(dir: string): boolean {
-	return (
-		fs.existsSync(path.join(dir, 'data', 'detectables.json')) ||
-		fs.existsSync(path.join(dir, 'detectables.json'))
-	);
+	return fs.existsSync(path.join(dir, 'data', 'detectables.json')) || fs.existsSync(path.join(dir, 'detectables.json'));
 }
 
 function getBundledRpcDir(): string {
 	if (app.isPackaged) {
 		return path.join(process.resourcesPath, 'rpc');
 	}
-	const candidates = [
-		path.join(app.getAppPath(), 'assets', 'rpc'),
-		path.join(app.getAppPath(), 'dist', 'rpc'),
-	];
+	const candidates = [path.join(app.getAppPath(), 'assets', 'rpc'), path.join(app.getAppPath(), 'dist', 'rpc')];
 	for (const candidate of candidates) {
 		if (hasDetectablesJson(candidate)) {
 			return candidate;
@@ -290,7 +284,11 @@ interface WindowsCmdlinePattern {
 let windowsCmdlinePatternsByBasename: Map<string, Array<WindowsCmdlinePattern>> | null = null;
 const WIN32_EXE_IN_CMDLINE = /[^/\\]+\.exe/gi;
 
-function addCmdlinePattern(map: Map<string, Array<WindowsCmdlinePattern>>, key: string, entry: WindowsCmdlinePattern): void {
+function addCmdlinePattern(
+	map: Map<string, Array<WindowsCmdlinePattern>>,
+	key: string,
+	entry: WindowsCmdlinePattern,
+): void {
 	const list = map.get(key) ?? [];
 	list.push(entry);
 	map.set(key, list);

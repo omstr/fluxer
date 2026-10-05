@@ -157,7 +157,9 @@ export class AdminSearchService {
 			}
 		}
 		const response = await Promise.all(
-			orderedUsers.map((user) => mapUserToAdminResponse(user, cacheService, acls, gatewayService, {includeActivities: false})),
+			orderedUsers.map((user) =>
+				mapUserToAdminResponse(user, cacheService, acls, gatewayService, {includeActivities: false}),
+			),
 		);
 		if (directUser && data.offset === 0) {
 			const directId = directUser.id.toString();

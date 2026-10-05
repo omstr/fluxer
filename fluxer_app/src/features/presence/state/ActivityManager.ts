@@ -40,7 +40,10 @@ function hasResolvablePrimaryImage(activity: UserActivity | null): boolean {
 	return Boolean(resolveActivityImageUrl(image, activity?.application_id));
 }
 
-function mergeRpcEntryWithDetectedFallback(rpcEntry: ActivityEntry, detectedEntry: ActivityEntry | undefined): ActivityEntry {
+function mergeRpcEntryWithDetectedFallback(
+	rpcEntry: ActivityEntry,
+	detectedEntry: ActivityEntry | undefined,
+): ActivityEntry {
 	if (!detectedEntry) {
 		return rpcEntry;
 	}
@@ -96,7 +99,12 @@ export class ActivityManager {
 		return this.activities;
 	}
 
-	setSourceActivity(source: ActivitySource, key: string, activity: UserActivity, gatewayActivity?: UserActivity | null): void {
+	setSourceActivity(
+		source: ActivitySource,
+		key: string,
+		activity: UserActivity,
+		gatewayActivity?: UserActivity | null,
+	): void {
 		let entries = this.sourceActivities.get(source);
 		if (!entries) {
 			entries = new Map<string, ActivityEntry>();
@@ -198,7 +206,8 @@ export class ActivityManager {
 			.map((entry) => entry.gatewayActivity ?? entry.activity)
 			.filter((activity): activity is UserActivity => Boolean(activity));
 		const activitiesChanged =
-			this.activities.length !== nextActivities.length || this.activities.some((activity, index) => activity !== nextActivities[index]);
+			this.activities.length !== nextActivities.length ||
+			this.activities.some((activity, index) => activity !== nextActivities[index]);
 		const gatewayActivitiesChanged =
 			this.gatewayActivities.length !== nextGatewayActivities.length ||
 			this.gatewayActivities.some((activity, index) => activity !== nextGatewayActivities[index]);

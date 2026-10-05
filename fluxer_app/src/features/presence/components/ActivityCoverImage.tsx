@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {resolveActivityImageUrl} from '@app/features/presence/utils/resolveActivityImageUrl';
-import { Tooltip } from '@app/features/ui/tooltip/Tooltip';
+import {Tooltip} from '@app/features/ui/tooltip/Tooltip';
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import type React from 'react';
 import {useEffect, useMemo, useState} from 'react';
@@ -34,7 +34,7 @@ export function ActivityCoverImage({activity, className, fallback}: ActivityCove
 	}
 	return (
 		<div style={{position: 'relative'}} data-flx="presence.activity-cover-image">
-			<Tooltip text={()=>activity.assets?.large_text} position="bottom">
+			<Tooltip text={() => activity.assets?.large_text} position="bottom">
 				<img
 					className={className}
 					src={iconUrl}
@@ -45,7 +45,7 @@ export function ActivityCoverImage({activity, className, fallback}: ActivityCove
 				/>
 			</Tooltip>
 			{badgeUrl && canLoadActivityImage(badgeUrl) ? (
-				<Tooltip text={()=>activity.assets?.small_text} position="bottom">
+				<Tooltip text={() => activity.assets?.small_text} position="bottom">
 					<img
 						className={className}
 						data-rpc-small-image-badge="true"

@@ -16,12 +16,12 @@ import {
 	UserProfileTimezoneInfo,
 } from '@app/features/user/components/popouts/UserProfileShared';
 import styles from '@app/features/user/components/profile/ProfilePreview.module.css';
+import {ProfileRichPresence} from '@app/features/user/components/profile/ProfileRichPresence';
 import {ProfileCardBanner} from '@app/features/user/components/profile/profile_card/ProfileCardBanner';
 import {ProfileCardContent} from '@app/features/user/components/profile/profile_card/ProfileCardContent';
 import {ProfileCardFooter} from '@app/features/user/components/profile/profile_card/ProfileCardFooter';
 import {ProfileCardLayout} from '@app/features/user/components/profile/profile_card/ProfileCardLayout';
 import {ProfileCardUserInfo} from '@app/features/user/components/profile/profile_card/ProfileCardUserInfo';
-import {ProfileRichPresence} from '@app/features/user/components/profile/ProfileRichPresence';
 import {useProfileCardDisplayState} from '@app/features/user/components/profile/useProfileCardDisplayState';
 import {PROFILE_POPOUT_GEOMETRY_STYLE} from '@app/features/user/constants/UserProfileSurfaceGeometry';
 import {useAutoplayExpandedProfileAnimations} from '@app/features/user/hooks/useAutoplayExpandedProfileAnimations';

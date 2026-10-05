@@ -8,7 +8,11 @@ import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSch
 
 const logger = new Logger('DesktopRpcBridge');
 
-function getActivityKey(payload: {source: 'ipc' | 'process-scan'; pid?: number; activity: UserActivity | null}): string | null {
+function getActivityKey(payload: {
+	source: 'ipc' | 'process-scan';
+	pid?: number;
+	activity: UserActivity | null;
+}): string | null {
 	if (typeof payload.pid === 'number' && Number.isFinite(payload.pid)) {
 		return `pid:${payload.pid}`;
 	}
@@ -62,7 +66,12 @@ function applyDesktopActivityPayload(payload: {
 	const activitySource: ActivitySource = payload.source === 'process-scan' ? 'detected' : 'rpc';
 	const activityKey = getActivityKey(payload);
 	if (payload.activity) {
-		ActivityManager.setSourceActivity(activitySource, activityKey ?? `${activitySource}:singleton`, payload.activity, payload.gatewayActivity ?? payload.activity);
+		ActivityManager.setSourceActivity(
+			activitySource,
+			activityKey ?? `${activitySource}:singleton`,
+			payload.activity,
+			payload.gatewayActivity ?? payload.activity,
+		);
 	} else {
 		ActivityManager.clearSourceActivity(activitySource, activityKey ?? undefined);
 	}

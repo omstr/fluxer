@@ -10,6 +10,7 @@ import {
 import {remFromPx} from '@app/features/theme/layout/RemFromPx';
 import {AccessibilityInlineContent} from '@app/features/user/components/modals/tabs/accessibility_tab/AccessibilityTabInline';
 import {AccountSecurityInlineTab} from '@app/features/user/components/modals/tabs/account_security_tab/AccountSecurityTabInline';
+import {ActivityGamesInlineContent} from '@app/features/user/components/modals/tabs/activity_games_tab/ActivityGamesTabInline';
 import {AppearanceInlineContent} from '@app/features/user/components/modals/tabs/appearance_tab/AppearanceTabInline';
 import ApplicationsTab from '@app/features/user/components/modals/tabs/applications_tab';
 import {ChatSettingsInlineContent} from '@app/features/user/components/modals/tabs/chat_settings_tab/ChatSettingsTabInline';
@@ -42,7 +43,6 @@ import {CaretRightIcon} from '@phosphor-icons/react';
 import {clsx} from 'clsx';
 import {observer} from 'mobx-react-lite';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import { ActivityGamesInlineContent } from '@app/features/user/components/modals/tabs/activity_games_tab/ActivityGamesTabInline';
 
 interface AllSettingsRendererProps {
 	searchQuery: string;

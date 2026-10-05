@@ -158,6 +158,7 @@ export const ActivityVisibilityLevelSchema = createInt32EnumType(
 	[
 		[ActivityVisibilityLevels.EVERYONE, 'EVERYONE', ActivityVisibilityLevelsDescriptions.EVERYONE],
 		[ActivityVisibilityLevels.FRIENDS, 'FRIENDS', ActivityVisibilityLevelsDescriptions.FRIENDS],
+		[ActivityVisibilityLevels.NO_ONE, 'NO_ONE', ActivityVisibilityLevelsDescriptions.NO_ONE],
 	],
 	'Activity visibility level',
 	'ActivityVisibilityLevel',

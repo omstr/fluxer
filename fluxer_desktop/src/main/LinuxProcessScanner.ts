@@ -2,7 +2,6 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import log from 'electron-log';
 import {emitSyntheticActivity} from '@electron/main/ArRpcServer';
 import {
 	getDetectableDb,
@@ -14,11 +13,12 @@ import {
 	ANTI_CHEAT_EXECUTABLES,
 	CMDLINE_NULL_SEPARATOR,
 	EXECUTABLE_ARCH_SUFFIXES,
-	LOST_GAME_MISS_THRESHOLD,
 	LINUX_PROC_DIR,
+	LOST_GAME_MISS_THRESHOLD,
 	PROCESS_SCAN_INTERVAL,
 } from '@electron/main/rpc/RpcConstants';
 import type {DetectableApp, RpcActivityPayload} from '@electron/main/rpc/RpcTypes';
+import log from 'electron-log';
 
 interface GameState {
 	name: string;
@@ -78,9 +78,7 @@ async function readProcessEntries(): Promise<Array<[number, string, Array<string
 			const exePath = args[0] ?? cmdline.replaceAll(CMDLINE_NULL_SEPARATOR, ' ').trim();
 			if (!exePath || isIgnoredPath(exePath)) continue;
 			processes.push([pid, exePath, args]);
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 	return processes;
 }

@@ -4,11 +4,11 @@ import type {GuildMember} from '@app/features/member/models/GuildMember';
 import {getUserAccentColor} from '@app/features/theme/utils/AccentColorUtils';
 import type {Profile} from '@app/features/user/models/Profile';
 import type {User} from '@app/features/user/models/User';
-import * as ProfileDisplayUtils from '@app/features/user/utils/ProfileDisplayUtils';
 import {
 	getProfileCardBannerFallbackColor,
 	getProfileCardBorderPresentation,
 } from '@app/features/user/utils/ProfileCardBorderUtils';
+import * as ProfileDisplayUtils from '@app/features/user/utils/ProfileDisplayUtils';
 import {MEDIA_PROXY_PROFILE_BANNER_SIZE_POPOUT} from '@fluxer/constants/src/MediaProxyAssetSizes';
 import type {MediaProxyImageSize} from '@fluxer/constants/src/MediaProxyImageSizes';
 import type {UserProfile} from '@fluxer/schema/src/domains/user/UserResponseSchemas';

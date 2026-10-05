@@ -1,25 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {EventEmitter} from 'node:events';
+import {unlinkSync} from 'node:fs';
 import {createConnection, createServer, type Server} from 'node:net';
 import {join} from 'node:path';
-import {unlinkSync} from 'node:fs';
-import {EventEmitter} from 'node:events';
-import log from 'electron-log';
 import {resolveByClientId} from '@electron/main/DetectableApplications';
 import {
 	ACTIVITY_FLAG_INSTANCE,
 	ActivityType,
+	IPC_MAX_RETRIES,
+	IPC_SOCKET_NAME,
+	IPCCloseCode,
 	IPCErrorCode,
 	IPCMessageType,
-	IPC_SOCKET_NAME,
-	IPC_MAX_RETRIES,
-	IPCCloseCode,
+	RPC_PROTOCOL_VERSION,
 	RPCCommand,
 	RPCEvent,
-	RPC_PROTOCOL_VERSION,
 } from '@electron/main/rpc/RpcConstants';
 import type {ExtendedSocket, RPCMessage, RpcActivityPayload, SetActivityArgs} from '@electron/main/rpc/RpcTypes';
-import {encodeIpcMessage, getUnixSocketBaseDir, normalizeTimestamps, resolveRpcActivityName} from '@electron/main/rpc/RpcUtils';
+import {
+	encodeIpcMessage,
+	getUnixSocketBaseDir,
+	normalizeTimestamps,
+	resolveRpcActivityName,
+} from '@electron/main/rpc/RpcUtils';
+import log from 'electron-log';
 
 const RPC_GENERIC_ERROR = 1000;
 type RpcActivityEventSource = 'ipc' | 'ipc-clear' | 'ipc-disconnect' | 'process-scan';
@@ -88,7 +93,11 @@ function readSocket(socket: ExtendedSocket): void {
 	socket._readBuffer = buffer.length > 0 ? buffer : undefined;
 }
 
-function closeSocket(socket: ExtendedSocket, code: IPCCloseCode | IPCErrorCode = IPCCloseCode.CLOSE_NORMAL, message = ''): void {
+function closeSocket(
+	socket: ExtendedSocket,
+	code: IPCCloseCode | IPCErrorCode = IPCCloseCode.CLOSE_NORMAL,
+	message = '',
+): void {
 	socket.write(encodeIpcMessage(IPCMessageType.CLOSE, {code, message}));
 	socket.end();
 	socket.destroy();
@@ -98,11 +107,7 @@ function sendFrame(socket: ExtendedSocket, msg: RPCMessage): void {
 	socket.write(encodeIpcMessage(IPCMessageType.FRAME, msg));
 }
 
-function emitActivity(
-	activity: RpcActivityPayload | null,
-	pid?: number,
-	source: RpcActivityEventSource = 'ipc',
-): void {
+function emitActivity(activity: RpcActivityPayload | null, pid?: number, source: RpcActivityEventSource = 'ipc'): void {
 	activityEmitter.emit('activity', activity, pid, source);
 }
 

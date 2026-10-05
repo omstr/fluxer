@@ -16,6 +16,7 @@ import {
 	WINDOWS_TOAST_ACTIVATOR_CLSID,
 } from '@electron/common/DesktopIdentity';
 import {configureUserDataPath} from '@electron/common/UserDataPath';
+import {startArRpcServer, stopArRpcServer} from '@electron/main/ArRpcServer';
 import {isAutostartLaunch, registerAutostartHandlers} from '@electron/main/Autostart';
 import {
 	addLinuxHardwareVideoEncodeFeatures,
@@ -48,16 +49,16 @@ import {
 	shouldResetWindowStateOnLaunch,
 } from '@electron/main/DesktopDebugInfo';
 import {destroyDesktopTray, hasActiveDesktopTray, initializeDesktopTray} from '@electron/main/DesktopTray';
+import {syncDetectableApplications} from '@electron/main/DetectableApplications';
 import {registerDisplayMediaHandlers} from '@electron/main/DisplayMedia';
 import {initializeDockMenu} from '@electron/main/DockMenu';
-import {syncDetectableApplications} from '@electron/main/DetectableApplications';
 import {cleanupGlobalShortcuts, initializeGlobalShortcuts} from '@electron/main/GlobalShortcutsIpc';
 import {cleanupIpcHandlers, registerIpcHandlers} from '@electron/main/IpcHandlers';
 import {initializeJumpList} from '@electron/main/JumpList';
 import {describeLaunchDiagnosticOptions} from '@electron/main/LaunchOptions';
 import {cleanupVirtmic, registerVirtmicHandlers} from '@electron/main/LinuxAudioCapture';
-import {startLinuxProcessScanner, stopLinuxProcessScanner} from '@electron/main/LinuxProcessScanner';
 import {ensureLinuxDesktopEntry} from '@electron/main/LinuxDesktopEntry';
+import {startLinuxProcessScanner, stopLinuxProcessScanner} from '@electron/main/LinuxProcessScanner';
 import {initializeMainI18n, t} from '@electron/main/MainI18n';
 import {createApplicationMenu} from '@electron/main/Menu';
 import {cleanupNativeAudio, registerNativeAudioHandlers} from '@electron/main/NativeAudio';
@@ -67,7 +68,6 @@ import {
 } from '@electron/main/NativeHardwareEncoder';
 import {runNativeModulePreflight} from '@electron/main/NativeModulePreflight';
 import {cleanupNativeScreenCapture, registerNativeScreenCaptureHandlers} from '@electron/main/NativeScreenCapture';
-import {startArRpcServer, stopArRpcServer} from '@electron/main/ArRpcServer';
 import {startRpcActivityBridge, stopRpcActivityBridge} from '@electron/main/RpcActivityBridge';
 import {cleanupLinuxChromiumSpellcheckDictionaries} from '@electron/main/Spellcheck';
 import {registerUpdater} from '@electron/main/Updater';
@@ -486,9 +486,7 @@ if (launchConfigurationError) {
 			cleanupNativeHardwareEncoderHandlers();
 			cleanupVirtmic();
 			destroyDesktopTray();
-			const asyncCleanups: Array<Promise<unknown>> = [
-				stopArRpcServer(),
-			];
+			const asyncCleanups: Array<Promise<unknown>> = [stopArRpcServer()];
 			stopRpcActivityBridge();
 			stopLinuxProcessScanner();
 			if (netLog.currentlyLogging) {

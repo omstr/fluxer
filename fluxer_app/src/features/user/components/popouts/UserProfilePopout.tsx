@@ -44,6 +44,7 @@ import {
 	UserProfileRoles,
 	UserProfileTimezoneInfo,
 } from '@app/features/user/components/popouts/UserProfileShared';
+import {ProfileRichPresence} from '@app/features/user/components/profile/ProfileRichPresence';
 import {ProfileCardActions} from '@app/features/user/components/profile/profile_card/ProfileCardActions';
 import {ProfileCardBanner} from '@app/features/user/components/profile/profile_card/ProfileCardBanner';
 import {ProfileCardContent} from '@app/features/user/components/profile/profile_card/ProfileCardContent';
@@ -52,7 +53,6 @@ import {ProfileCardLayout} from '@app/features/user/components/profile/profile_c
 import {ProfileCardUserInfo} from '@app/features/user/components/profile/profile_card/ProfileCardUserInfo';
 import {UserProfileLoadingSkeleton} from '@app/features/user/components/profile/UserProfileLoadingSkeleton';
 import {useProfileCardDisplayState} from '@app/features/user/components/profile/useProfileCardDisplayState';
-import {ProfileRichPresence} from '@app/features/user/components/profile/ProfileRichPresence';
 import {VoiceActivitySection} from '@app/features/user/components/profile/VoiceActivitySection';
 import {PROFILE_POPOUT_GEOMETRY_STYLE} from '@app/features/user/constants/UserProfileSurfaceGeometry';
 import {useAutoplayExpandedProfileAnimations} from '@app/features/user/hooks/useAutoplayExpandedProfileAnimations';
@@ -212,15 +212,24 @@ export const UserProfilePopout: React.FC<UserProfilePopoutProps> = observer(
 			);
 			requestClose();
 		};
-		const {profileContext, avatarUrl, hoverAvatarUrl, bannerUrl, hoverBannerUrl, borderColor, borderGradient, bannerFallbackColor, profileData} =
-			useProfileCardDisplayState({
-				user,
-				profile,
-				guildId: profile?.guildId,
-				guildMember,
-				guildMemberProfile: profile?.guildMemberProfile,
-				bannerSize: MEDIA_PROXY_PROFILE_BANNER_SIZE_POPOUT,
-			});
+		const {
+			profileContext,
+			avatarUrl,
+			hoverAvatarUrl,
+			bannerUrl,
+			hoverBannerUrl,
+			borderColor,
+			borderGradient,
+			bannerFallbackColor,
+			profileData,
+		} = useProfileCardDisplayState({
+			user,
+			profile,
+			guildId: profile?.guildId,
+			guildMember,
+			guildMemberProfile: profile?.guildMemberProfile,
+			bannerSize: MEDIA_PROXY_PROFILE_BANNER_SIZE_POPOUT,
+		});
 		const avatarMenuUrl = getUserMenuAvatarUrl({user, profile, profileContext});
 		const bannerMenuUrl = getUserMenuBannerUrl({user, profile, profileContext});
 		const handleAvatarContextMenu = useCallback(

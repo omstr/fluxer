@@ -104,7 +104,11 @@ function formatListeningActivity(activity: UserActivity): ActivityDisplayLines {
 	const resolved = resolveListeningTitleAndArtist(details, state, name);
 
 	const title = resolved.title ?? name ?? details ?? '';
-	const artist = dedupeLine(resolved.artist, title, name) ?? dedupeLine(state, title, name) ?? dedupeLine(details, title, name) ?? 'Unknown';
+	const artist =
+		dedupeLine(resolved.artist, title, name) ??
+		dedupeLine(state, title, name) ??
+		dedupeLine(details, title, name) ??
+		'Unknown';
 	const listeningSource = resolveListeningSource(name, title, artist);
 
 	return {headerSuffix: listeningSource, listeningSource, primary: artist, secondary: title};

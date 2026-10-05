@@ -15653,7 +15653,7 @@
 					"banner": {"nullable": true, "type": "string"},
 					"bio": {"nullable": true, "type": "string"},
 					"pronouns": {"nullable": true, "type": "string"},
-					"activities": {"type": "array", "items": {"$ref": "#/components/schemas/UserActivitySchema"}, "maxItems": 16},
+					"activities": {"maxItems": 16, "type": "array", "items": {"$ref": "#/components/schemas/UserActivitySchema"}},
 					"accent_color": {"nullable": true, "allOf": [{"$ref": "#/components/schemas/Int32Type"}]},
 					"email": {"nullable": true, "type": "string"},
 					"email_verified": {"type": "boolean"},
@@ -15738,6 +15738,103 @@
 				],
 				"additionalProperties": false
 			},
+			"UserActivitySchema": {
+				"type": "object",
+				"properties": {
+					"name": {
+						"type": "string",
+						"maxLength": 128,
+						"description": "Activity name (usually the application or song title)"
+					},
+					"type": {"type": "integer", "minimum": 0, "maximum": 5, "description": "Activity type (0 = Playing)"},
+					"status_display_type": {"type": "integer", "minimum": 0, "maximum": 2},
+					"application_id": {"description": "Application ID for rich presence", "type": "string", "maxLength": 128},
+					"details": {"description": "First line of rich presence text", "type": "string", "maxLength": 128},
+					"details_url": {"type": "string", "maxLength": 2048, "format": "uri"},
+					"state": {"description": "Second line of rich presence text", "type": "string", "maxLength": 128},
+					"state_url": {"type": "string", "maxLength": 2048, "format": "uri"},
+					"timestamps": {
+						"type": "object",
+						"properties": {
+							"start": {
+								"description": "Unix timestamp (seconds) when the activity started",
+								"type": "integer",
+								"minimum": -9007199254740991,
+								"maximum": 9007199254740991
+							},
+							"end": {
+								"description": "Unix timestamp (seconds) when the activity ends",
+								"type": "integer",
+								"minimum": -9007199254740991,
+								"maximum": 9007199254740991
+							}
+						},
+						"additionalProperties": false,
+						"description": "Activity timestamp metadata"
+					},
+					"assets": {
+						"type": "object",
+						"properties": {
+							"large_image": {"type": "string", "maxLength": 256},
+							"large_text": {"type": "string", "maxLength": 128},
+							"large_url": {"type": "string", "maxLength": 2048, "format": "uri"},
+							"small_image": {"type": "string", "maxLength": 256},
+							"small_text": {"type": "string", "maxLength": 128},
+							"small_url": {"type": "string", "maxLength": 2048, "format": "uri"}
+						},
+						"additionalProperties": false,
+						"description": "Activity image assets"
+					},
+					"buttons": {
+						"maxItems": 2,
+						"type": "array",
+						"items": {
+							"type": "object",
+							"properties": {
+								"label": {"type": "string", "maxLength": 32},
+								"url": {"type": "string", "maxLength": 2048, "format": "uri"}
+							},
+							"required": ["label", "url"],
+							"additionalProperties": false
+						}
+					},
+					"party": {
+						"type": "object",
+						"properties": {
+							"id": {"type": "string", "maxLength": 128},
+							"size": {
+								"minItems": 2,
+								"maxItems": 2,
+								"type": "array",
+								"items": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+							}
+						},
+						"additionalProperties": false
+					},
+					"secrets": {
+						"type": "object",
+						"properties": {
+							"join": {"type": "string", "maxLength": 128},
+							"spectate": {"type": "string", "maxLength": 128},
+							"match": {"type": "string", "maxLength": 128}
+						},
+						"additionalProperties": false
+					},
+					"metadata": {
+						"type": "object",
+						"properties": {
+							"button_urls": {
+								"maxItems": 2,
+								"type": "array",
+								"items": {"type": "string", "maxLength": 2048, "format": "uri"}
+							}
+						},
+						"additionalProperties": false
+					}
+				},
+				"required": ["name", "type"],
+				"additionalProperties": false
+			},
 			"PremiumFlags": {
 				"type": "integer",
 				"minimum": 0,
@@ -15763,98 +15860,6 @@
 					{"name": "ENABLED_OVERRIDE", "value": "128", "description": "Premium status is enabled via override"},
 					{"name": "PERKS_DISABLED", "value": "256", "description": "User has temporarily disabled premium perks"}
 				]
-			},
-			"UserActivitySchema": {
-				"type": "object",
-				"properties": {
-					"name": {
-						"type": "string",
-						"maxLength": 128,
-						"description": "Activity name (usually the application or song title)"
-					},
-					"type": {
-						"type": "integer",
-						"minimum": 0,
-						"maximum": 5,
-						"format": "int32",
-						"description": "Activity type (0 = Playing)"
-					},
-					"status_display_type": {"type": "integer", "minimum": 0, "maximum": 2, "format": "int32"},
-					"application_id": {"type": "string", "maxLength": 128, "description": "Application ID for rich presence"},
-					"details": {"type": "string", "maxLength": 128, "description": "First line of rich presence text"},
-					"details_url": {"type": "string", "maxLength": 2048, "format": "uri"},
-					"state": {"type": "string", "maxLength": 128, "description": "Second line of rich presence text"},
-					"state_url": {"type": "string", "maxLength": 2048, "format": "uri"},
-					"timestamps": {
-						"type": "object",
-						"properties": {
-							"start": {
-								"type": "integer",
-								"format": "int53",
-								"description": "Unix timestamp (seconds) when the activity started"
-							},
-							"end": {
-								"type": "integer",
-								"format": "int53",
-								"description": "Unix timestamp (seconds) when the activity ends"
-							}
-						},
-						"description": "Activity timestamp metadata"
-					},
-					"assets": {
-						"type": "object",
-						"properties": {
-							"large_image": {"type": "string", "maxLength": 256},
-							"large_text": {"type": "string", "maxLength": 128},
-							"large_url": {"type": "string", "maxLength": 2048, "format": "uri"},
-							"small_image": {"type": "string", "maxLength": 256},
-							"small_text": {"type": "string", "maxLength": 128},
-							"small_url": {"type": "string", "maxLength": 2048, "format": "uri"}
-						},
-						"description": "Activity image assets"
-					},
-					"buttons": {
-						"type": "array",
-						"items": {
-							"type": "object",
-							"properties": {
-								"label": {"type": "string", "maxLength": 32},
-								"url": {"type": "string", "maxLength": 2048, "format": "uri"}
-							},
-							"required": ["label", "url"]
-						},
-						"maxItems": 2
-					},
-					"party": {
-						"type": "object",
-						"properties": {
-							"id": {"type": "string", "maxLength": 128},
-							"size": {
-								"type": "array",
-								"items": {"type": "integer", "minimum": 0, "maximum": 9007199254740991, "format": "int53"}
-							}
-						}
-					},
-					"secrets": {
-						"type": "object",
-						"properties": {
-							"join": {"type": "string", "maxLength": 128},
-							"spectate": {"type": "string", "maxLength": 128},
-							"match": {"type": "string", "maxLength": 128}
-						}
-					},
-					"metadata": {
-						"type": "object",
-						"properties": {
-							"button_urls": {
-								"type": "array",
-								"items": {"type": "string", "maxLength": 2048, "format": "uri"},
-								"maxItems": 2
-							}
-						}
-					}
-				},
-				"required": ["name", "type"]
 			},
 			"EmailType": {"type": "string"},
 			"AdminRelationshipEntrySchema": {

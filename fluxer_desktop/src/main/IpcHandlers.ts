@@ -35,8 +35,8 @@ import {registerNotificationIpcHandlers} from '@electron/main/NotificationsIpc';
 import {openExternalDeduped} from '@electron/main/OpenExternal';
 import {registerPasskeyHandlers} from '@electron/main/Passkeys';
 import {getAppMetricsSnapshot, getDesktopInfo, getGpuInfo} from '@electron/main/PlatformInfo';
-import {getLatestRpcActivityUpdate} from '@electron/main/RpcActivityBridge';
 import {requirePrivilegedRendererDocumentSender} from '@electron/main/PrivilegedRendererDocuments';
+import {getLatestRpcActivityUpdate} from '@electron/main/RpcActivityBridge';
 import {getStreamerModeCaptureAppStatus} from '@electron/main/StreamerModeProcessDetection';
 import {
 	acquireStreamingPriority,

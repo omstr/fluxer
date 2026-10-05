@@ -10,7 +10,7 @@ export interface PresenceRecord {
 	readonly afk?: boolean;
 	readonly mobile?: boolean;
 	readonly custom_status?: GatewayCustomStatusPayload | null;
-	readonly activities?: UserActivity[] | null;
+	readonly activities?: Array<UserActivity> | null;
 }
 
 export type Presence = PresenceRecord;

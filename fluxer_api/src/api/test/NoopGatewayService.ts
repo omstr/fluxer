@@ -39,7 +39,6 @@ import type {GuildMemberResponse} from '@fluxer/schema/src/domains/guild/GuildMe
 import type {GuildResponse} from '@fluxer/schema/src/domains/guild/GuildResponseSchemas';
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 
-
 const guildOwners = new Map<string, UserID>();
 const guildMembers = new Map<string, Set<UserID>>();
 const guildRepository = new GuildRepository();

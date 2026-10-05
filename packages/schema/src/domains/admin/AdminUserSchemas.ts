@@ -8,6 +8,7 @@ import {
 	UserFlagsDescriptions,
 } from '@fluxer/constants/src/UserConstants';
 import {ADMIN_ACL_COUNT, AdminAclType} from '@fluxer/schema/src/domains/admin/AdminAclType';
+import {UserActivitySchema} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import {CalendarDateType} from '@fluxer/schema/src/primitives/DateValidators';
 import {NSFWLevelSchema} from '@fluxer/schema/src/primitives/GuildValidators';
 import {createQueryIntegerType, QueryBooleanType} from '@fluxer/schema/src/primitives/QueryValidators';
@@ -22,7 +23,6 @@ import {
 	SnowflakeType,
 	withFieldDescription,
 } from '@fluxer/schema/src/primitives/SchemaPrimitives';
-import {UserActivitySchema} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import {DiscriminatorType, EmailType, UsernameType} from '@fluxer/schema/src/primitives/UserValidators';
 import {z} from 'zod';
 

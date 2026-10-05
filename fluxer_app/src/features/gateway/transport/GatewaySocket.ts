@@ -32,11 +32,11 @@ import {ExponentialBackoff} from '@app/features/platform/utils/RetryScheduler';
 import LayerManager from '@app/features/ui/state/LayerManager';
 import MobileLayout from '@app/features/ui/state/MobileLayout';
 import type {GatewayCustomStatusPayload} from '@app/features/user/state/CustomStatus';
-import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import MediaEngine from '@app/features/voice/engine/MediaEngineFacade';
 import type {GatewayErrorCode} from '@fluxer/constants/src/GatewayConstants';
 import {GatewayCloseCodes, GatewayOpcodes} from '@fluxer/constants/src/GatewayConstants';
 import type {ValueOf} from '@fluxer/constants/src/ValueOf';
+import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import EventEmitter from 'eventemitter3';
 
 const GATEWAY_TIMEOUTS = {
