@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {resolveActivityImageUrl} from '@app/features/presence/utils/resolveActivityImageUrl';
+import { Tooltip } from '@app/features/ui/tooltip/Tooltip';
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import type React from 'react';
 import {useEffect, useMemo, useState} from 'react';
@@ -33,25 +34,27 @@ export function ActivityCoverImage({activity, className, fallback}: ActivityCove
 	}
 	return (
 		<div style={{position: 'relative'}} data-flx="presence.activity-cover-image">
-			<img
-				className={className}
-				src={iconUrl}
-				alt=""
-				title={activity.assets?.large_text ?? activity.assets?.small_text}
-				referrerPolicy="no-referrer"
-				decoding="async"
-				onError={() => setFailed(true)}
-			/>
-			{badgeUrl && canLoadActivityImage(badgeUrl) ? (
+			<Tooltip text={()=>activity.assets?.large_text} position="bottom">
 				<img
 					className={className}
-					data-rpc-small-image-badge="true"
-					src={badgeUrl}
+					src={iconUrl}
 					alt=""
-					title={activity.assets?.small_text}
 					referrerPolicy="no-referrer"
 					decoding="async"
+					onError={() => setFailed(true)}
 				/>
+			</Tooltip>
+			{badgeUrl && canLoadActivityImage(badgeUrl) ? (
+				<Tooltip text={()=>activity.assets?.small_text} position="bottom">
+					<img
+						className={className}
+						data-rpc-small-image-badge="true"
+						src={badgeUrl}
+						alt=""
+						referrerPolicy="no-referrer"
+						decoding="async"
+					/>
+				</Tooltip>
 			) : null}
 		</div>
 	);

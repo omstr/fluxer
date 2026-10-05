@@ -3,6 +3,7 @@
 import {getSettingsAudience} from '@app/features/user/components/settings_utils/SettingsMetadata';
 import {accessibilitySections} from '@app/features/user/components/settings_utils/section_registry/AccessibilitySections';
 import {accountSecuritySections} from '@app/features/user/components/settings_utils/section_registry/AccountSecuritySections';
+import { activityGamesSections } from '@app/features/user/components/settings_utils/section_registry/ActivityGamesSections';
 import {appearanceSections} from '@app/features/user/components/settings_utils/section_registry/AppearanceSections';
 import {chatSettingsSections} from '@app/features/user/components/settings_utils/section_registry/ChatSettingsSections';
 import {generalSettingsSections} from '@app/features/user/components/settings_utils/section_registry/GeneralSettingsSections';
@@ -33,6 +34,7 @@ const SECTION_REGISTRY = [
 	...privacySafetySections,
 	...accountSecuritySections,
 	...notificationsSections,
+	...activityGamesSections,
 ] as const satisfies ReadonlyArray<SectionDefinition>;
 
 export type SettingsSectionId = (typeof SECTION_REGISTRY)[number]['id'];

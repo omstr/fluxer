@@ -11,6 +11,7 @@ export type SettingsCategoryTag =
 	| 'media'
 	| 'voice'
 	| 'notifications'
+	| 'activity'
 	| 'desktop'
 	| 'developer';
 

@@ -266,6 +266,9 @@ export class UserAccountSettingsService {
 		if (data.synced_preferences !== undefined) {
 			updatedRowData.synced_preferences = normalizeSyncedPreferencesSnapshot(data.synced_preferences);
 		}
+		if (data.activity_visibility !== undefined) {
+			updatedRowData.activity_visibility = data.activity_visibility;
+		}
 		await this.deps.userSettingsRepository.upsertSettings(updatedRowData);
 		const updatedSettings = await this.findSettings(userId);
 		await this.deps.updatePropagator.dispatchUserSettingsUpdate({userId, settings: updatedSettings});

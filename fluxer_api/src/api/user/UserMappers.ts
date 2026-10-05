@@ -338,6 +338,7 @@ export function mapUserSettingsToResponse(params: {settings: UserSettings}): Use
 		synced_preferences: settings.syncedPreferences,
 		profile_privacy: settings.profilePrivacy,
 		default_share_voice_activity: settings.defaultShareVoiceActivity,
+		activity_visibility: settings.activityVisibility,
 	};
 }
 

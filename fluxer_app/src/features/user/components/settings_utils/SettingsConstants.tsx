@@ -32,6 +32,7 @@ import {
 	DesktopIcon,
 	DevicesIcon,
 	EyeSlashIcon,
+	GameControllerIcon,
 	GearIcon,
 	GiftIcon,
 	type Icon,
@@ -119,6 +120,10 @@ const MESSAGES_AND_MEDIA_DESCRIPTOR = msg({
 const AUDIO_AND_VIDEO_DESCRIPTOR = msg({
 	message: 'Voice & video',
 	comment: 'User settings tab for microphone, speaker, camera, and call stats.',
+});
+const ACTIVITY_AND_GAMES_DESCRIPTOR = msg({
+	message: 'Activity & Games',
+	comment: 'User settings tab for activity presence and games.',
 });
 const SHORTCUTS_DESCRIPTOR = msg({
 	message: 'Shortcuts',
@@ -285,6 +290,12 @@ const ALL_TABS_DESCRIPTORS: Array<SettingsTabDescriptor> = [
 		category: 'app_settings',
 		label: AUDIO_AND_VIDEO_DESCRIPTOR,
 		icon: MicrophoneIcon,
+	},
+	{
+		type: 'activity_games',
+		category: 'app_settings',
+		label: ACTIVITY_AND_GAMES_DESCRIPTOR,
+		icon: GameControllerIcon,
 	},
 	{
 		type: 'accessibility',

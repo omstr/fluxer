@@ -41,6 +41,8 @@ import {
 import type {StatusType} from '@fluxer/constants/src/StatusConstants';
 import {normalizeStatus, StatusTypes} from '@fluxer/constants/src/StatusConstants';
 import {
+	type ActivityVisibilityLevel,
+	ActivityVisibilityLevels,
 	DEFAULT_GUILD_FOLDER_ICON,
 	type GuildFolderIcon,
 	type ProfilePrivacyLevel,
@@ -96,6 +98,7 @@ export interface UserSettings {
 	incomingCallFlags: number;
 	groupDmAddPermissionFlags: number;
 	profilePrivacy: ProfilePrivacyLevel;
+	activityVisibility: ActivityVisibilityLevel;
 	defaultShareVoiceActivity: boolean;
 	guildFolders: Array<GuildFolder>;
 	customStatus: CustomStatus | null;
@@ -280,6 +283,7 @@ class UserSettingsState {
 	incomingCallFlags: number = 0;
 	groupDmAddPermissionFlags: number = 0;
 	profilePrivacy: ProfilePrivacyLevel = ProfilePrivacyLevels.ALL_GUILDS;
+	activityVisibility: ActivityVisibilityLevel = ActivityVisibilityLevels.EVERYONE;
 	defaultShareVoiceActivity: boolean = true;
 	guildFolders: Array<GuildFolder> = [];
 	customStatus: CustomStatus | null = null;
@@ -494,6 +498,14 @@ class UserSettingsState {
 		return this.profilePrivacy;
 	}
 
+	getActivityDetectionEnabled(): boolean {
+		return this.getSubPreference('activityDetectionEnabled') ?? true;
+	}
+
+	getActivityVisibility(): ActivityVisibilityLevel {
+		return this.activityVisibility;
+	}
+
 	getDefaultShareVoiceActivity(): boolean {
 		return this.defaultShareVoiceActivity;
 	}
@@ -649,6 +661,9 @@ class UserSettingsState {
 		if (camelCaseSettings.profilePrivacy !== undefined) {
 			this.profilePrivacy = camelCaseSettings.profilePrivacy;
 		}
+		if (camelCaseSettings.activityVisibility !== undefined) {
+			this.activityVisibility = camelCaseSettings.activityVisibility;
+		}
 		if (camelCaseSettings.defaultShareVoiceActivity !== undefined) {
 			this.defaultShareVoiceActivity = camelCaseSettings.defaultShareVoiceActivity;
 		}
@@ -742,6 +757,7 @@ class UserSettingsState {
 			incomingCallFlags: this.incomingCallFlags,
 			groupDmAddPermissionFlags: this.groupDmAddPermissionFlags,
 			profilePrivacy: this.profilePrivacy,
+			activityVisibility: this.activityVisibility,
 			defaultShareVoiceActivity: this.defaultShareVoiceActivity,
 			guildFolders: this.guildFolders.map((folder) => ({
 				...folder,
@@ -807,6 +823,10 @@ class UserSettingsState {
 		});
 		this.persistLocalSyncedPreferences();
 		return this.scheduleSyncedPreferencesFlush();
+	}
+
+	async setActivityDetectionEnabled(value: boolean): Promise<void> {
+		return this.setSubPreference('activityDetectionEnabled', value);
 	}
 
 	private markSyncedPreferenceFieldDirty(field: SyncedPreferencesField): void {

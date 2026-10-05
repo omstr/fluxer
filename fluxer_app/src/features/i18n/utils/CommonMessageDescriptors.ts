@@ -129,6 +129,10 @@ export const GENERAL_DESCRIPTOR = msg({
 	message: 'General',
 	comment: 'Generic section label for broad or default settings.',
 });
+export const ACTIVITY_DETECTION_DESCRIPTOR = msg({
+	message: 'Activity detection',
+	comment: 'Section label in the Activity & Games settings tab.',
+});
 export const SEARCH_SETTINGS_PLACEHOLDER_DESCRIPTOR = msg({
 	message: 'Search settings…',
 	comment: 'Placeholder text in settings search fields. The ellipsis indicates the user can type a query.',

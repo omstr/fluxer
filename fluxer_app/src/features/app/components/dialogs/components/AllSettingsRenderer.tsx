@@ -42,6 +42,7 @@ import {CaretRightIcon} from '@phosphor-icons/react';
 import {clsx} from 'clsx';
 import {observer} from 'mobx-react-lite';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
+import { ActivityGamesInlineContent } from '@app/features/user/components/modals/tabs/activity_games_tab/ActivityGamesTabInline';
 
 interface AllSettingsRendererProps {
 	searchQuery: string;
@@ -78,6 +79,7 @@ const INLINE_TAB_COMPONENTS: Partial<Record<UserSettingsTabType, React.Component
 	applications: ApplicationsTab,
 	keybinds: KeybindsTab,
 	linked_accounts: LinkedAccountsTab,
+	activity_games: ActivityGamesInlineContent,
 };
 const getInlineTabComponent = (tab: SettingsTab): React.ComponentType<Record<string, unknown>> | null => {
 	const inlineComponent = INLINE_TAB_COMPONENTS[tab.type as UserSettingsTabType];

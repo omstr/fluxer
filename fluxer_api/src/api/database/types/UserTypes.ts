@@ -271,6 +271,7 @@ export interface UserSettingsRow {
 	synced_preferences: Nullish<string>;
 	profile_privacy: Nullish<number>;
 	default_share_voice_activity: Nullish<boolean>;
+	activity_visibility: Nullish<number>;
 	version: number;
 }
 
@@ -507,6 +508,7 @@ export const USER_SETTINGS_COLUMNS = [
 	'synced_preferences',
 	'profile_privacy',
 	'default_share_voice_activity',
+	'activity_visibility',
 	'version',
 ] as const satisfies ReadonlyArray<keyof UserSettingsRow>;
 export const USER_GUILD_SETTINGS_COLUMNS = [

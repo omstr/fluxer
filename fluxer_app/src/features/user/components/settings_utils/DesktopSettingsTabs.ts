@@ -2,6 +2,7 @@
 
 import {AccessibilityTab} from '@app/features/user/components/modals/tabs/AccessibilityTab';
 import AccountSecurityTab from '@app/features/user/components/modals/tabs/AccountSecurityTab';
+import ActivityGamesTab from '@app/features/user/components/modals/tabs/ActivityGamesTab';
 import AdvancedSettingsTab from '@app/features/user/components/modals/tabs/AdvancedSettingsTab';
 import {AppearanceTab} from '@app/features/user/components/modals/tabs/AppearanceTab';
 import ApplicationsTab from '@app/features/user/components/modals/tabs/applications_tab';
@@ -43,6 +44,7 @@ const DESKTOP_TAB_COMPONENTS: Partial<Record<UserSettingsTabType, React.Componen
 	embed_debugger: EmbedDebuggerTab,
 	applications: ApplicationsTab,
 	component_gallery: ComponentGalleryTab,
+	activity_games: ActivityGamesTab,
 };
 export const getSettingsTabComponent = (
 	tabType: UserSettingsTabType,

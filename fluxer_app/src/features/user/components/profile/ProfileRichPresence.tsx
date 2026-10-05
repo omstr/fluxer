@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {ActivityCoverImage} from '@app/features/presence/components/ActivityCoverImage';
 import {ExternalLink} from '@app/features/app/components/shared/ExternalLink';
-import {formatActivityDisplay} from '@app/features/presence/utils/formatActivityDisplay';
+import {ActivityCoverImage} from '@app/features/presence/components/ActivityCoverImage';
 import {usePresenceActivities} from '@app/features/presence/hooks/usePresenceActivities';
+import {formatActivityDisplay} from '@app/features/presence/utils/formatActivityDisplay';
 import styles from '@app/features/user/components/profile/ProfileRichPresence.module.css';
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import {Trans} from '@lingui/react/macro';
@@ -14,12 +14,15 @@ import {useEffect, useMemo, useState} from 'react';
 interface ProfileRichPresenceProps {
 	userId: string;
 }
+type DurationDirectionType = 'elapsed' | 'remaining' | 'total';
 
 function getActivityHeader(activity: UserActivity, listeningSource: string | null): React.ReactNode {
 	switch (activity.type) {
 		case 2:
 			return listeningSource ? (
-				<Trans comment="Rich presence header when listening to a music app or album">Listening to {listeningSource}</Trans>
+				<Trans comment="Rich presence header when listening to a music app or album">
+					Listening to {listeningSource}
+				</Trans>
 			) : (
 				<Trans comment="Rich presence header when listening to music with no app name">Listening to Music</Trans>
 			);
@@ -38,22 +41,18 @@ function normalizeStartTimestamp(start?: number): number | undefined {
 	return start;
 }
 
-function formatElapsed(startSeconds: number, nowMs: number): string {
-	const elapsed = Math.max(0, Math.floor(nowMs / 1000) - startSeconds);
-	const hours = Math.floor(elapsed / 3600);
-	const minutes = Math.floor((elapsed % 3600) / 60);
-	const seconds = elapsed % 60;
-	if (hours > 0) {
-		return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-	}
-	return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-function formatRemaining(endSeconds: number, nowMs: number): string {
-	const remaining = Math.max(0, endSeconds - Math.floor(nowMs / 1000));
-	const hours = Math.floor(remaining / 3600);
-	const minutes = Math.floor((remaining % 3600) / 60);
-	const seconds = remaining % 60;
+function formatDuration(timestampSeconds: number, nowMs: number, direction: DurationDirectionType): string {
+	const nowSeconds = Math.floor(nowMs / 1000);
+	const directionCalc =
+		direction === 'elapsed'
+			? nowSeconds - timestampSeconds
+			: direction === 'remaining'
+				? timestampSeconds - nowSeconds
+				: timestampSeconds;
+	const duration = Math.max(0, directionCalc);
+	const hours = Math.floor(duration / 3600);
+	const minutes = Math.floor((duration % 3600) / 60);
+	const seconds = duration % 60;
 	if (hours > 0) {
 		return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 	}
@@ -83,18 +82,14 @@ function ActivityTimer({start, end}: {start?: number; end?: number}) {
 		const id = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(id);
 	}, [endSeconds, startSeconds]);
-	if (startSeconds && endSeconds && endSeconds > Math.floor(now / 1000)) {
-		return (
-			<div className={styles.activityTimer}>
-				{formatElapsed(startSeconds, now)} elapsed • {formatRemaining(endSeconds, now)} left
-			</div>
-		);
+	if (startSeconds && endSeconds) {
+		return null;
 	}
 	if (startSeconds) {
-		return <div className={styles.activityTimer}>{formatElapsed(startSeconds, now)} elapsed</div>;
+		return <div className={styles.activityTimer}>{formatDuration(startSeconds, now, 'elapsed')} elapsed</div>;
 	}
 	if (endSeconds && endSeconds > Math.floor(now / 1000)) {
-		return <div className={styles.activityTimer}>{formatRemaining(endSeconds, now)} left</div>;
+		return <div className={styles.activityTimer}>{formatDuration(endSeconds, now, 'total')}</div>;
 	}
 	return null;
 }
@@ -110,11 +105,15 @@ function ActivityProgress({start, end}: {start?: number; end?: number}) {
 	}, [endSeconds, startSeconds]);
 	if (!startSeconds || !endSeconds || endSeconds <= startSeconds) return null;
 	return (
-		<div className={styles.activityProgress} aria-hidden>
-			<div
-				className={styles.activityProgressFill}
-				style={{width: `${getProgressPercent(startSeconds, endSeconds, now)}%`}}
-			/>
+		<div className={styles.activityProgressRow}>
+			<span className={styles.activityProgressTime}>{formatDuration(startSeconds, now, 'elapsed')}</span>
+			<div className={styles.activityProgress} aria-hidden>
+				<div
+					className={styles.activityProgressFill}
+					style={{width: `${getProgressPercent(startSeconds, endSeconds, now)}%`}}
+				/>
+			</div>
+			<span className={styles.activityProgressTime}>{formatDuration(endSeconds - startSeconds, now, 'total')}</span>
 		</div>
 	);
 }
@@ -126,15 +125,7 @@ function ActivityFallbackIcon({type}: {type: number}) {
 	return <GameControllerIcon className={styles.activityIconFallback} weight="fill" aria-hidden />;
 }
 
-function ActivityLine({
-	className,
-	href,
-	children,
-}: {
-	className: string;
-	href?: string;
-	children: React.ReactNode;
-}) {
+function ActivityLine({className, href, children}: {className: string; href?: string; children: React.ReactNode}) {
 	if (!href) return <div className={className}>{children}</div>;
 	return (
 		<ExternalLink href={href} className={`${className} ${styles.activityLink}`}>
@@ -202,19 +193,23 @@ export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({userId}
 					) : null}
 					<ActivityProgress start={activity.timestamps?.start} end={activity.timestamps?.end} />
 					<ActivityTimer start={activity.timestamps?.start} end={activity.timestamps?.end} />
-					{activity.buttons?.length ? (
-						<div className={styles.activityButtons}>
-							{activity.buttons.map((button) => (
-								<ExternalLink
-									key={`${button.label}:${button.url}`}
-									href={button.url}
-									className={styles.activityButton}
-								>
-									{button.label}
-								</ExternalLink>
-							))}
-						</div>
-					) : null}
+					{/* [OM] conditionally include state? <ActivityLine className={styles.activitySecondary} href={activity.}></ActivityLine> */}
+					{activity.buttons?.length
+						? null
+						: // ( [OM] prefer icons if we can somewhere.
+							// 	<div className={styles.activityButtons}>
+							// 		{activity.buttons.map((button) => (
+							// 			<ExternalLink
+							// 				key={`${button.label}:${button.url}`}
+							// 				href={button.url}
+							// 				className={styles.activityButton}
+							// 			>
+							// 				{button.label}
+							// 			</ExternalLink>
+							// 		))}
+							// 	</div>
+							// )
+							null}
 				</div>
 			</div>
 		</div>

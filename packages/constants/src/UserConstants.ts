@@ -300,6 +300,19 @@ export const ProfileFieldPrivacyFlagsDescriptions: Record<keyof typeof ProfileFi
 	FRIENDS: 'Allow friends to see this profile field',
 	MUTUAL_GUILDS: 'Allow members from mutual guilds to see this profile field',
 };
+
+export const ActivityVisibilityLevels = {
+	EVERYONE: 0,
+	FRIENDS: 1,
+} as const;
+
+export type ActivityVisibilityLevel = (typeof ActivityVisibilityLevels)[keyof typeof ActivityVisibilityLevels];
+
+export const ActivityVisibilityLevelsDescriptions: Record<keyof typeof ActivityVisibilityLevels, string> = {
+	EVERYONE: 'Activity visible to friends and members of any shared guild',
+	FRIENDS: 'Activity visible only to friends',
+};
+
 export const SMALL_GUILD_MEMBER_THRESHOLD = 200;
 export const VOICE_ACTIVITY_SHARING_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 export const UserNotificationSettings = {

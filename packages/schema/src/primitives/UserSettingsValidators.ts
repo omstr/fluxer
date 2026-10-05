@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {
+	ActivityVisibilityLevels,
+	ActivityVisibilityLevelsDescriptions,
 	GuildFolderIcons,
 	MentionReplyPreferences,
 	MentionReplyPreferencesDescriptions,
@@ -151,4 +153,12 @@ export const ProfilePrivacyLevelSchema = createInt32EnumType(
 	],
 	'Profile privacy visibility level',
 	'ProfilePrivacyLevel',
+);
+export const ActivityVisibilityLevelSchema = createInt32EnumType(
+	[
+		[ActivityVisibilityLevels.EVERYONE, 'EVERYONE', ActivityVisibilityLevelsDescriptions.EVERYONE],
+		[ActivityVisibilityLevels.FRIENDS, 'FRIENDS', ActivityVisibilityLevelsDescriptions.FRIENDS],
+	],
+	'Activity visibility level',
+	'ActivityVisibilityLevel',
 );

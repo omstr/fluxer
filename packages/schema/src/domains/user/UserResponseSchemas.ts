@@ -32,6 +32,7 @@ import {
 	withOpenApiType,
 } from '@fluxer/schema/src/primitives/SchemaPrimitives';
 import {
+	ActivityVisibilityLevelSchema,
 	GuildFolderIconSchema,
 	MentionReplyPreferencesSchema,
 	ProfilePrivacyLevelSchema,
@@ -409,6 +410,10 @@ export const UserSettingsResponse = z.object({
 		.describe(
 			'Default value of share_voice_activity applied to newly accepted friend relationships. Read-only here; mutated via PUT /users/@me/settings/voice-activity-sharing.',
 		),
+	activity_visibility: withFieldDescription(
+		ActivityVisibilityLevelSchema,
+		'Optionally restricts who sees the users activity',
+	),
 });
 
 export type UserSettingsResponse = z.infer<typeof UserSettingsResponse>;

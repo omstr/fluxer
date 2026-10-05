@@ -16,6 +16,7 @@ const CHAT_TAG_DESCRIPTOR = msg({message: 'Chat', comment: 'Advanced settings ca
 const MEDIA_TAG_DESCRIPTOR = msg({message: 'Media', comment: 'Advanced settings category tag.'});
 const VOICE_TAG_DESCRIPTOR = msg({message: 'Voice', comment: 'Advanced settings category tag.'});
 const NOTIFICATIONS_TAG_DESCRIPTOR = msg({message: 'Notifications', comment: 'Advanced settings category tag.'});
+const ACTIVITY_TAG_DESCRIPTOR = msg({message: 'Activity', comment: 'Advanced settings category tag.'});
 const DESKTOP_TAG_DESCRIPTOR = msg({message: 'Desktop', comment: 'Advanced settings category tag.'});
 const DEVELOPER_TAG_DESCRIPTOR = msg({message: 'Developer', comment: 'Advanced settings category tag.'});
 
@@ -28,6 +29,7 @@ export const ADVANCED_SETTINGS_TAG_ORDER: ReadonlyArray<SettingsCategoryTag> = [
 	'media',
 	'voice',
 	'notifications',
+	'activity',
 	'desktop',
 	'developer',
 ];
@@ -41,6 +43,7 @@ export const ADVANCED_SETTINGS_TAG_LABELS = {
 	media: MEDIA_TAG_DESCRIPTOR,
 	voice: VOICE_TAG_DESCRIPTOR,
 	notifications: NOTIFICATIONS_TAG_DESCRIPTOR,
+	activity: ACTIVITY_TAG_DESCRIPTOR,
 	desktop: DESKTOP_TAG_DESCRIPTOR,
 	developer: DEVELOPER_TAG_DESCRIPTOR,
 } satisfies Record<SettingsCategoryTag, MessageDescriptor>;
@@ -60,6 +63,7 @@ const SOURCE_TAB_CATEGORY: Partial<Record<UserSettingsTabType, SettingsCategoryT
 	chat_settings: 'chat',
 	voice_video: 'voice',
 	notifications: 'notifications',
+	activity_games: 'activity',
 	desktop_settings: 'desktop',
 	client_developer_settings: 'developer',
 };

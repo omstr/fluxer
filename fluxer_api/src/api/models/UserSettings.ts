@@ -7,6 +7,8 @@ import {UserCustomStatus} from '@app/api/models/UserCustomStatus';
 import {UserGuildFolder} from '@app/api/models/UserGuildFolder';
 import type {LocaleCode} from '@fluxer/constants/src/Locales';
 import {
+	type ActivityVisibilityLevel,
+	ActivityVisibilityLevels,
 	DEFAULT_GUILD_FOLDER_ICON,
 	FriendSourceFlags,
 	GroupDmAddPermissionFlags,
@@ -68,6 +70,7 @@ export class UserSettings {
 	readonly syncedPreferences: string;
 	readonly profilePrivacy: ProfilePrivacyLevel;
 	readonly defaultShareVoiceActivity: boolean;
+	readonly activityVisibility: ActivityVisibilityLevel;
 	readonly version: number;
 
 	constructor(row: UserSettingsRow) {
@@ -115,6 +118,7 @@ export class UserSettings {
 		this.syncedPreferences = normalizeStoredSyncedPreferences(row.synced_preferences);
 		this.profilePrivacy = (row.profile_privacy ?? ProfilePrivacyLevels.ALL_GUILDS) as ProfilePrivacyLevel;
 		this.defaultShareVoiceActivity = row.default_share_voice_activity ?? true;
+		this.activityVisibility = (row.activity_visibility ?? ActivityVisibilityLevels.EVERYONE) as ActivityVisibilityLevel;
 		this.version = row.version;
 	}
 
@@ -171,6 +175,7 @@ export class UserSettings {
 			synced_preferences: this.syncedPreferences === '' ? null : this.syncedPreferences,
 			profile_privacy: this.profilePrivacy,
 			default_share_voice_activity: this.defaultShareVoiceActivity,
+			activity_visibility: this.activityVisibility,
 			version: this.version,
 		};
 	}
@@ -244,6 +249,7 @@ export class UserSettings {
 			synced_preferences: null,
 			profile_privacy: ProfilePrivacyLevels.ALL_GUILDS,
 			default_share_voice_activity: true,
+			activity_visibility: ActivityVisibilityLevels.EVERYONE,
 			version: 1,
 		};
 	}

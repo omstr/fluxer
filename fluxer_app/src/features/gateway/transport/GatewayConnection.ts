@@ -43,6 +43,7 @@ import Presence from '@app/features/presence/state/Presence';
 import QuickSwitcher from '@app/features/search/state/QuickSwitcher';
 import TypingIndicator from '@app/features/typing/state/TypingIndicator';
 import LayerManager from '@app/features/ui/state/LayerManager';
+import UserSettings from '@app/features/user/state/UserSettings';
 import MediaEngine from '@app/features/voice/engine/MediaEngineFacade';
 import {DEFAULT_API_VERSION, FAVORITES_GUILD_ID} from '@fluxer/constants/src/AppConstants';
 import {GatewayIdentifyFlags} from '@fluxer/constants/src/GatewayConstants';
@@ -159,6 +160,7 @@ class GatewayConnection {
 				() => ({
 					presenceKey: LocalPresence.presenceKey,
 					activityKey: ActivityManager.activityKey,
+					activityDetectionEnabled: UserSettings.getActivityDetectionEnabled(),
 				}),
 				() => {
 					this.syncLocalPresence();
@@ -177,7 +179,7 @@ class GatewayConnection {
 			presence.afk,
 			presence.mobile,
 			presence.custom_status,
-			ActivityManager.getGatewayActivities(),
+			UserSettings.getActivityDetectionEnabled() ? ActivityManager.getGatewayActivities() : [],
 		);
 	}
 

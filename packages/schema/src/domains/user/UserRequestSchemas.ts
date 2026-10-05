@@ -38,6 +38,7 @@ import {
 } from '@fluxer/schema/src/primitives/SchemaPrimitives';
 import {URLType} from '@fluxer/schema/src/primitives/UrlValidators';
 import {
+	ActivityVisibilityLevelSchema,
 	GuildFolderIconSchema,
 	MentionReplyPreferencesSchema,
 	ProfilePrivacyLevelSchema,
@@ -385,6 +386,10 @@ export const UserSettingsUpdateRequest = z
 		default_share_voice_activity: z
 			.boolean()
 			.describe('Default share_voice_activity applied to new friend relationships'),
+		activity_visibility: withFieldDescription(
+			ActivityVisibilityLevelSchema,
+			'Restricts who can see the activities detected on your devices',
+		),
 		synced_preferences: z
 			.string()
 			.max(SYNCED_PREFERENCES_MAX_ENCODED_LENGTH)
