@@ -9,6 +9,7 @@
     maybe_flush_pending_presences/3,
     flush_all_pending_presences/1,
     dispatch_presence_now/2,
+    filter_event_data/3,
     maybe_sync_presence_targets/3,
     sync_presence_targets/1,
     event_changes_presence_targets/1,
@@ -56,6 +57,42 @@ should_buffer_guild_presence(GuildIdValue, State) ->
         undefined ->
             true
     end.
+
+-spec filter_event_data(event(), term(), session_state()) -> term().
+filter_event_data(presence_update, Data, State) ->
+    filter_activities(Data, State);
+filter_event_data(presence_update_bulk, #{<<"presences">> := Presences} = Data, State) when
+    is_list(Presences)
+->
+    Data#{<<"presences">> => [filter_activities(Presence, State) || Presence <- Presences]};
+filter_event_data(_Event, Data, _State) ->
+    Data.
+
+-spec filter_activities(term(), session_state()) -> term().
+filter_activities(Data, State) when is_map(Data) ->
+    case maps:is_key(<<"activity_visibility">>, Data) of
+        false ->
+            Data;
+        true ->
+            TargetId = presence_user_id(Data),
+            SelfId = maps:get(user_id, State, undefined),
+            Visibility = maps:get(<<"activity_visibility">>, Data, 0),
+            Relationships = maps:get(relationships, State, #{}),
+            Keep =
+                TargetId =:= SelfId orelse
+                    Visibility =:= 0 orelse
+                    (Visibility =:= 1 andalso
+                        (relationship_allows_presence(TargetId, Relationships) orelse
+                            is_group_dm_recipient(TargetId, State))),
+            Stripped =
+                case Keep of
+                    true -> Data;
+                    false -> maps:remove(<<"activities">>, Data)
+                end,
+            maps:remove(<<"activity_visibility">>, Stripped)
+    end;
+filter_activities(Data, _State) ->
+    Data.
 
 -spec check_user_presence_buffering(user_id() | undefined, session_state()) -> boolean().
 check_user_presence_buffering(undefined, _State) ->
@@ -197,7 +234,7 @@ flush_pending_presences(UserId, State) ->
 -spec dispatch_presence_now(map(), session_state()) -> session_state().
 dispatch_presence_now(P, State) ->
     Event = maps:get(event, P),
-    Data = maps:get(data, P),
+    Data = filter_event_data(Event, maps:get(data, P), State),
     Seq = maps:get(seq, State),
     Buffer = maps:get(buffer, State),
     SocketPid = maps:get(socket_pid, State, undefined),
@@ -453,6 +490,73 @@ presence_user_id_test() ->
     ?assertEqual(undefined, presence_user_id(#{})),
     ?assertEqual(undefined, presence_user_id(#{<<"user">> => not_a_map})),
     ok.
+
+visibility_activity() ->
+    #{<<"name">> => <<"Artist - Track">>, <<"type">> => 2}.
+
+visibility_data(UserIdBin, Visibility) ->
+    (presence_data(UserIdBin))#{
+        <<"activity_visibility">> => Visibility,
+        <<"activities">> => [visibility_activity()]
+    }.
+
+filter_activities_keeps_activities_for_everyone_test() ->
+    State = buffering_test_state(),
+    Result = filter_activities(visibility_data(<<"99">>, 0), State),
+    ?assertEqual([visibility_activity()], maps:get(<<"activities">>, Result)),
+    ?assertEqual(false, maps:is_key(<<"activity_visibility">>, Result)).
+
+filter_activities_keeps_activities_for_friend_test() ->
+    State = (buffering_test_state())#{relationships => #{4 => 1}},
+    Result = filter_activities(visibility_data(<<"4">>, 1), State),
+    ?assertEqual([visibility_activity()], maps:get(<<"activities">>, Result)),
+    ?assertEqual(false, maps:is_key(<<"activity_visibility">>, Result)).
+
+filter_activities_keeps_activities_for_group_dm_recipient_test() ->
+    State = buffering_test_state(),
+    Result = filter_activities(visibility_data(<<"3">>, 1), State),
+    ?assertEqual([visibility_activity()], maps:get(<<"activities">>, Result)).
+
+filter_activities_strips_activities_for_non_friend_test() ->
+    State = (buffering_test_state())#{relationships => #{4 => 1}},
+    Result = filter_activities(visibility_data(<<"99">>, 1), State),
+    ?assertEqual(false, maps:is_key(<<"activities">>, Result)),
+    ?assertEqual(false, maps:is_key(<<"activity_visibility">>, Result)).
+
+filter_activities_strips_activities_for_no_one_test() ->
+    State = (buffering_test_state())#{relationships => #{4 => 1}},
+    Result = filter_activities(visibility_data(<<"4">>, 2), State),
+    ?assertEqual(false, maps:is_key(<<"activities">>, Result)).
+
+filter_activities_keeps_self_presence_test() ->
+    State = (buffering_test_state())#{relationships => #{}},
+    Result = filter_activities(visibility_data(<<"1">>, 2), State),
+    ?assertEqual([visibility_activity()], maps:get(<<"activities">>, Result)).
+
+filter_activities_passes_through_without_marker_test() ->
+    State = buffering_test_state(),
+    Data = presence_data(<<"99">>),
+    ?assertEqual(Data, filter_activities(Data, State)).
+
+filter_event_data_filters_presence_update_bulk_test() ->
+    State = (buffering_test_state())#{relationships => #{4 => 1}},
+    Data = #{
+        <<"guild_id">> => <<"100">>,
+        <<"presences">> => [
+            visibility_data(<<"4">>, 1),
+            visibility_data(<<"99">>, 1)
+        ]
+    },
+    [FriendPresence, StrangerPresence] = maps:get(
+        <<"presences">>, filter_event_data(presence_update_bulk, Data, State)
+    ),
+    ?assertEqual([visibility_activity()], maps:get(<<"activities">>, FriendPresence)),
+    ?assertEqual(false, maps:is_key(<<"activities">>, StrangerPresence)).
+
+filter_event_data_leaves_other_events_test() ->
+    State = buffering_test_state(),
+    Data = #{<<"guild_id">> => <<"42">>, <<"presences">> => []},
+    ?assertEqual(Data, filter_event_data(guild_create, Data, State)).
 
 event_changes_presence_targets_test() ->
     ?assertEqual(true, event_changes_presence_targets(relationship_add)),

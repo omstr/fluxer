@@ -44,7 +44,10 @@ import {
 	UserProfileRoles,
 	UserProfileTimezoneInfo,
 } from '@app/features/user/components/popouts/UserProfileShared';
-import {ProfileRichPresence} from '@app/features/user/components/profile/ProfileRichPresence';
+import {
+	LISTENING_SOURCE_MAX_LENGTH_POPOUT,
+	ProfileRichPresence,
+} from '@app/features/user/components/profile/ProfileRichPresence';
 import {ProfileCardActions} from '@app/features/user/components/profile/profile_card/ProfileCardActions';
 import {ProfileCardBanner} from '@app/features/user/components/profile/profile_card/ProfileCardBanner';
 import {ProfileCardContent} from '@app/features/user/components/profile/profile_card/ProfileCardContent';
@@ -365,7 +368,13 @@ export const UserProfilePopout: React.FC<UserProfilePopoutProps> = observer(
 									data-flx="user.user-profile-popout.user-profile-preview-bio"
 								/>
 							)}
-							{!isWebhook && <ProfileRichPresence userId={user.id} />}
+							{!isWebhook && (
+								<ProfileRichPresence
+									userId={user.id}
+									onOpenProfile={handleOpenFullProfile}
+									listeningSourceMaxLength={LISTENING_SOURCE_MAX_LENGTH_POPOUT}
+								/>
+							)}
 							{!isWebhook && (
 								<VoiceActivitySection
 									userId={user.id}

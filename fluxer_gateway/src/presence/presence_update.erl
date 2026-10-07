@@ -81,7 +81,17 @@ is_valid_activity(Activity) ->
 -spec handle_user_settings_update(map(), state()) -> state().
 handle_user_settings_update(Data, State) ->
     State1 = maybe_update_custom_status(Data, State),
-    maybe_force_invisible_status(Data, State1).
+    State2 = maybe_force_invisible_status(Data, State1),
+    maybe_update_activity_visibility(Data, State2).
+
+-spec maybe_update_activity_visibility(map(), state()) -> state().
+maybe_update_activity_visibility(Data, State) ->
+    case maps:find(<<"activity_visibility">>, Data) of
+        {ok, Visibility} when is_integer(Visibility), Visibility >= 0, Visibility < 3 ->
+            State#{activity_visibility => Visibility};
+        _ ->
+            State
+    end.
 
 -spec maybe_update_custom_status(map(), state()) -> state().
 maybe_update_custom_status(Data, State) ->
@@ -563,6 +573,47 @@ handle_user_settings_update_visible_status_clears_forced_invisible_test() ->
         },
         maps:get(sessions, Updated)
     ).
+
+maybe_update_activity_visibility_stores_supported_levels_test() ->
+    ?assertEqual(
+        0,
+        maps:get(
+            activity_visibility,
+            maybe_update_activity_visibility(#{<<"activity_visibility">> => 0}, #{})
+        )
+    ),
+    ?assertEqual(
+        1,
+        maps:get(
+            activity_visibility,
+            maybe_update_activity_visibility(#{<<"activity_visibility">> => 1}, #{})
+        )
+    ),
+    ?assertEqual(
+        2,
+        maps:get(
+            activity_visibility,
+            maybe_update_activity_visibility(#{<<"activity_visibility">> => 2}, #{})
+        )
+    ).
+
+maybe_update_activity_visibility_ignores_absent_or_invalid_test() ->
+    ?assertEqual(#{}, maybe_update_activity_visibility(#{}, #{})),
+    ?assertEqual(#{}, maybe_update_activity_visibility(#{<<"activity_visibility">> => 3}, #{})),
+    ?assertEqual(
+        #{}, maybe_update_activity_visibility(#{<<"activity_visibility">> => -1}, #{})
+    ),
+    ?assertEqual(
+        #{}, maybe_update_activity_visibility(#{<<"activity_visibility">> => <<"1">>}, #{})
+    ),
+    ?assertEqual(
+        #{}, maybe_update_activity_visibility(#{<<"activity_visibility">> => null}, #{})
+    ).
+
+handle_user_settings_update_stores_activity_visibility_test() ->
+    State = #{custom_status => null, sessions => #{}},
+    Updated = handle_user_settings_update(#{<<"activity_visibility">> => 2}, State),
+    ?assertEqual(2, maps:get(activity_visibility, Updated)).
 
 buffer_push_notification_caps_entries_test() ->
     with_gateway_config(

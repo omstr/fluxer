@@ -207,7 +207,8 @@ build_presence_external(State) ->
         mobile => maps:get(<<"mobile">>, Payload, false),
         afk => maps:get(<<"afk">>, Payload, false),
         custom_status => maps:get(<<"custom_status">>, Payload, null),
-        activities => maps:get(<<"activities">>, Payload, null)
+        activities => maps:get(<<"activities">>, Payload, null),
+        activity_visibility => maps:get(<<"activity_visibility">>, Payload, undefined)
     },
     {Payload, CurrentExternal, ExternalStatus}.
 
@@ -238,7 +239,10 @@ build_presence_payload(State) ->
     UserData = maps:get(user_data, State, #{}),
     CustomStatus = maps:get(custom_status, State, null),
     Activities = presence_status:get_current_activities(Sessions),
-    presence_payload:build(UserData, Status, Mobile, Afk, CustomStatus, Activities).
+    Payload = presence_payload:build(UserData, Status, Mobile, Afk, CustomStatus, Activities),
+    Payload#{
+        <<"activity_visibility">> => presence_status:get_activity_visibility(State)
+    }.
 
 -spec dispatch_foreign_presence(user_id(), map(), state()) -> {noreply, state()}.
 dispatch_foreign_presence(TargetId, Payload, State) ->
@@ -278,8 +282,12 @@ is_local_self_presence_echo(Payload, State) ->
             {CurrentPayload, _CurrentExternal, _ExternalStatus} = build_presence_external(
                 State
             ),
-            CurrentPayload =:= Payload
+            strip_visibility(CurrentPayload) =:= strip_visibility(Payload)
     end.
+
+-spec strip_visibility(map()) -> map().
+strip_visibility(Payload) ->
+    maps:remove(<<"activity_visibility">>, Payload).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

@@ -703,13 +703,10 @@ member_subscription_test_state() ->
             [{31, member_subscription_test_member(31, [3000])}]
     ),
     Tab = ets:new(member_subscription_test_presence, [set, public]),
-    ets:insert(
-        Tab,
-        {23,
-            presence_payload:build(
-                maps:get(<<"user">>, maps:get(23, Members)), <<"online">>, false, false, null
-            )}
+    User23Presence = presence_payload:build(
+        maps:get(<<"user">>, maps:get(23, Members)), <<"online">>, false, false, null
     ),
+    ets:insert(Tab, {23, User23Presence#{<<"activity_visibility">> => 0}}),
     Subs = lists:foldl(
         fun(UserId, Acc) -> guild_subscriptions:subscribe(<<"s1">>, UserId, Acc) end,
         guild_subscriptions:init_state(),

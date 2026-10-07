@@ -13,7 +13,7 @@ import {useEffect, useState} from 'react';
 export const NOTE_MIN_ROWS = 2;
 export const NOTE_MAX_ROWS = 8;
 
-export type ProfileTab = 'overview' | 'mutual_friends' | 'mutual_communities_groups';
+export type ProfileTab = 'overview' | 'activity' | 'mutual_friends' | 'mutual_communities_groups';
 
 export interface UserInfoProps {
 	user: User;

@@ -344,6 +344,7 @@
 }
 
 .tabsWrapper {
+	padding-left: 0.75rem;
 	margin-bottom: 0.5rem;
 	flex-shrink: 0;
 	min-width: 0;

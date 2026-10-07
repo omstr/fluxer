@@ -11,6 +11,7 @@
 -type session_id() :: binary().
 -type status() :: online | offline | idle | dnd | invisible.
 -type custom_status() :: map() | null.
+-type activity_visibility() :: 0..2.
 -type session_entry() :: #{
     session_id := session_id(),
     status := status(),
@@ -30,6 +31,7 @@
     sessions := sessions(),
     push_buffer := [push_buffer_entry()],
     custom_status := custom_status(),
+    activity_visibility := activity_visibility(),
     activities := [map()] | null,
     status := status(),
     guild_ids := #{integer() => true},
@@ -214,6 +216,7 @@ build_initial_state(PresenceData) ->
         sessions => #{},
         push_buffer => [],
         custom_status => maps:get(custom_status, PresenceData, null),
+        activity_visibility => 0,
         activities => null,
         status => Status,
         guild_ids => presence_targets:map_from_ids(GuildIds),

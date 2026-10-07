@@ -6,6 +6,7 @@
 -export([
     get_current_status/1,
     get_current_activities/1,
+    get_activity_visibility/1,
     get_flattened_mobile/1,
     get_flattened_afk/1,
     collect_sessions_for_replace/1
@@ -59,6 +60,10 @@ get_flattened_mobile(Sessions) ->
 is_online_mobile_session(Session) ->
     maps:get(status, Session, offline) =:= online andalso
         maps:get(mobile, Session, false).
+
+-spec get_activity_visibility(map()) -> integer().
+get_activity_visibility(State) ->
+    maps:get(activity_visibility, State, 0).
 
 -spec get_current_activities(sessions()) -> activities().
 get_current_activities(Sessions) ->

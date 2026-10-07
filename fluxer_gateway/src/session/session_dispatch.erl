@@ -145,7 +145,8 @@ route_after_cancel(Event, Data, State) ->
         true ->
             {noreply, session_dispatch_presence:buffer_presence(Event, Data, State)};
         false ->
-            do_handle_dispatch(Event, Data, State)
+            FilteredData = session_dispatch_presence:filter_event_data(Event, Data, State),
+            do_handle_dispatch(Event, FilteredData, State)
     end.
 
 -spec do_handle_dispatch(event(), map() | list(), session_state()) ->

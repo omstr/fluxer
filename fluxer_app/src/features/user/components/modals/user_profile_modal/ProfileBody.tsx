@@ -37,6 +37,7 @@ import {
 	useContextMenuTarget,
 } from '@app/features/user/components/modals/user_profile_modal/UserProfileModalShared';
 import {UserInfo} from '@app/features/user/components/modals/user_profile_modal/UserProfileModalUserInfo';
+import {ProfileRichPresence} from '@app/features/user/components/profile/ProfileRichPresence';
 import {User} from '@app/features/user/models/User';
 import {ME} from '@fluxer/constants/src/AppConstants';
 import type {UserPartial} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
@@ -47,13 +48,17 @@ import {observer} from 'mobx-react-lite';
 import type React from 'react';
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 
-const MUTUAL_FRIENDS_DESCRIPTOR = msg({
-	message: 'Mutual friends ({count})',
-	comment: 'Short label in the user profile modal. Keep it concise. Preserve {count}; it is inserted by code.',
-});
 const OVERVIEW_DESCRIPTOR = msg({
 	message: 'Overview',
 	comment: 'Short label in the user profile modal. Keep it concise.',
+});
+const ACTIVITY_PRESENCE_DESCRIPTOR = msg({
+	message: 'Activity',
+	comment: 'Short label in the user profile modal. Keep it concise.',
+});
+const MUTUAL_FRIENDS_DESCRIPTOR = msg({
+	message: 'Mutual friends ({count})',
+	comment: 'Short label in the user profile modal. Keep it concise. Preserve {count}; it is inserted by code.',
 });
 const MIN_TABS_SCALE = 0.7;
 const TABS_SCALE_EPSILON = 0.001;
@@ -112,6 +117,10 @@ export const ProfileBody: React.FC<ProfileBodyProps> = observer(
 				});
 			}
 			items.push({
+				key: 'activity',
+				label: i18n._(ACTIVITY_PRESENCE_DESCRIPTOR),
+			});
+			items.push({
 				key: 'mutual_communities_groups',
 				label: i18n._(
 					getMutualItemsDescriptor({
@@ -131,12 +140,16 @@ export const ProfileBody: React.FC<ProfileBodyProps> = observer(
 			mutualCommunitiesGroupsCount,
 			i18n.locale,
 		]);
+		const visibleTabs = useMemo(
+			() => (isCurrentUser ? tabs.filter((tab) => tab.key === 'overview' || tab.key === 'activity') : tabs),
+			[isCurrentUser, tabs],
+		);
 		useEffect(() => {
-			if (tabs.some((tab) => tab.key === activeTab)) {
+			if (visibleTabs.some((tab) => tab.key === activeTab)) {
 				return;
 			}
-			setActiveTab(tabs[0]?.key ?? 'overview');
-		}, [activeTab, tabs]);
+			setActiveTab(visibleTabs[0]?.key ?? 'overview');
+		}, [activeTab, visibleTabs]);
 		const tabsWrapperRef = useRef<HTMLDivElement>(null);
 		useLayoutEffect(() => {
 			const wrapper = tabsWrapperRef.current;
@@ -333,6 +346,9 @@ export const ProfileBody: React.FC<ProfileBodyProps> = observer(
 				)}
 			</div>
 		);
+		const renderActivityPresence = () => {
+			return <ProfileRichPresence userId={user.id} showEmptyState />;
+		};
 		const renderActiveTabContent = () => {
 			switch (activeTab) {
 				case 'overview':
@@ -346,6 +362,8 @@ export const ProfileBody: React.FC<ProfileBodyProps> = observer(
 							data-flx="user.user-profile-modal.render-active-tab-content.profile-content"
 						/>
 					);
+				case 'activity':
+					return renderActivityPresence();
 				case 'mutual_friends':
 					return showMutualFriendsTab ? renderMutualFriendsList() : renderMutualCommunitiesGroupsList();
 				case 'mutual_communities_groups':
@@ -361,22 +379,18 @@ export const ProfileBody: React.FC<ProfileBodyProps> = observer(
 					showProfileDataWarning={showProfileDataWarning}
 					data-flx="user.user-profile-modal.profile-body.user-info"
 				/>
-				{!isCurrentUser ? (
-					<div
-						ref={tabsWrapperRef}
-						className={userProfileModalStyles.tabsWrapper}
-						data-flx="user.user-profile-modal.profile-body.div--2"
-					>
-						<Tabs
-							activeTab={activeTab}
-							onTabChange={handleTabChange}
-							tabs={tabs}
-							data-flx="user.user-profile-modal.profile-body.tabs"
-						/>
-					</div>
-				) : (
-					<div className={userProfileModalStyles.separator} data-flx="user.user-profile-modal.profile-body.div--3" />
-				)}
+				<div
+					ref={tabsWrapperRef}
+					className={userProfileModalStyles.tabsWrapper}
+					data-flx="user.user-profile-modal.profile-body.div--2"
+				>
+					<Tabs
+						activeTab={activeTab}
+						onTabChange={handleTabChange}
+						tabs={visibleTabs}
+						data-flx="user.user-profile-modal.profile-body.tabs"
+					/>
+				</div>
 				<div
 					className={userProfileModalStyles.profileContentWrapper}
 					data-flx="user.user-profile-modal.profile-body.div--4"

@@ -24,13 +24,14 @@ user_data() ->
     #{<<"id">> => integer_to_binary(?USER), <<"username">> => <<"reader">>}.
 
 published_presence(PresenceSessions) ->
-    presence_payload:build(
+    Built = presence_payload:build(
         user_data(),
         presence_status:get_current_status(PresenceSessions),
         presence_status:get_flattened_mobile(PresenceSessions),
         presence_status:get_flattened_afk(PresenceSessions),
         null
-    ).
+    ),
+    Built#{<<"activity_visibility">> => 0}.
 
 guild_state(SessionPids) ->
     #{
