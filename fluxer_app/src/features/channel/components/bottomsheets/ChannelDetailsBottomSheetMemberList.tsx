@@ -23,6 +23,7 @@ import {
 } from '@app/features/member/utils/MemberListLayout';
 import {buildMemberListRangeWindow} from '@app/features/member/utils/MemberListRangeUtils';
 import * as PermissionUtils from '@app/features/permissions/utils/PermissionUtils';
+import {useMemberPresenceSubscription} from '@app/features/presence/hooks/useMemberPresenceSubscription';
 import TypingIndicator from '@app/features/typing/state/TypingIndicator';
 import {OwnerCrownIcon} from '@app/features/ui/action_menu/ContextMenuIcons';
 import {StatusAwareAvatar} from '@app/features/ui/components/StatusAwareAvatar';
@@ -118,6 +119,7 @@ export const MobileMemberListItem = observer(
 	}) => {
 		const {i18n} = useLingui();
 		const isTyping = TypingIndicator.isMemberListTyping(channelId, member.user.id, Authentication.currentUserId);
+		useMemberPresenceSubscription({guildId: guild.id, userId: member.user.id});
 		const status = resolveMemberListPresence({guildId: guild.id, channelId, userId: member.user.id});
 		const memberListCustomStatus = resolveMemberListCustomStatus({
 			guildId: guild.id,

@@ -131,6 +131,7 @@ member_list_presence_fields(Presence) ->
     {
         maps:get(<<"status">>, Presence, <<"offline">>),
         maps:get(<<"custom_status">>, Presence, null),
+				maps:get(<<"activities">>, Presence, null),
         maps:get(<<"mobile">>, Presence, false)
     }.
 

@@ -257,16 +257,16 @@ export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({
 				</div>
 				<div className={styles.activityBody}>
 					<ActivityLine className={styles.activityPrimary} href={activity.details_url}>
-						{display.secondary } {/* [OM] return to this block. May require displaying seperate information depending on the type of activity*/}
+						{display.primary } {/* [OM] return to this block. May require displaying seperate information depending on the type of activity*/}
 					</ActivityLine>
-					{display.primary ? (
+					{display.secondary ? (
 						<ActivityLine className={styles.activitySecondary} href={activity.state_url}>
-							{display.primary}
+							{display.secondary}
 						</ActivityLine>
 					) : null}
 					<ActivityProgress start={activity.timestamps?.start} end={activity.timestamps?.end} />
 					<ActivityTimer start={activity.timestamps?.start} end={activity.timestamps?.end} />
-					{activity?.state && activity.state !== display.primary ? (
+					{activity?.state && activity.state !== display.primary || activity.state !== display.secondary ? (
 						<ActivityLine className={styles.activitySecondary} href={activity.state}>
 							{activity.state}
 						</ActivityLine>

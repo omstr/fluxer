@@ -10,6 +10,7 @@ import Guilds from '@app/features/guild/state/Guilds';
 import {useMemberListCustomStatus} from '@app/features/member/hooks/useMemberListCustomStatus';
 import {useMemberListPresence} from '@app/features/member/hooks/useMemberListPresence';
 import type {GuildMember} from '@app/features/member/models/GuildMember';
+import {useMemberPresenceSubscription} from '@app/features/presence/hooks/useMemberPresenceSubscription';
 import TypingIndicator from '@app/features/typing/state/TypingIndicator';
 import {GroupDMMemberContextMenu} from '@app/features/ui/action_menu/GroupDMContextMenu';
 import {GuildMemberContextMenu} from '@app/features/ui/action_menu/GuildMemberContextMenu';
@@ -82,6 +83,11 @@ export const MemberListItem: React.FC<MemberListItemProps> = observer((props) =>
 		enabled: providedStatus === undefined,
 	});
 	const status = providedStatus !== undefined ? providedStatus : hookStatus;
+	useMemberPresenceSubscription({
+		guildId: guildId ?? '',
+		userId: user.id,
+		enabled: guildId !== undefined,
+	});
 	const hookCustomStatus = useMemberListCustomStatus({
 		guildId: guildId ?? '',
 		channelId,
