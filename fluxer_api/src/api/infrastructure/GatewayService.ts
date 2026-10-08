@@ -61,6 +61,11 @@ interface DispatchGuildParams {
 	data: unknown;
 }
 
+interface DispatchGuildManyParams {
+	guildId: GuildID;
+	events: Array<{event: GatewayDispatchEvent; data: unknown}>;
+}
+
 interface DispatchPresenceParams {
 	userId: UserID;
 	event: GatewayDispatchEvent;
@@ -679,6 +684,14 @@ export class GatewayService {
 			guild_id: guildId.toString(),
 			event,
 			data,
+		});
+	}
+
+	async dispatchGuildMany({guildId, events}: DispatchGuildManyParams): Promise<void> {
+		if (events.length === 0) return;
+		await this.call('guild.dispatch_many', {
+			guild_id: guildId.toString(),
+			events,
 		});
 	}
 

@@ -225,6 +225,7 @@ export class UserRepository implements IUserRepositoryAggregate {
 		updates: {
 			premiumWillCancel: boolean;
 			computedPremiumUntil: Date | null;
+			periodStart: Date | null;
 		},
 	): Promise<{
 		finalVersion: number | null;
@@ -738,6 +739,10 @@ export class UserRepository implements IUserRepositoryAggregate {
 
 	async getPaymentByCheckoutSession(checkoutSessionId: string): Promise<Payment | null> {
 		return this.contentRepo.getPaymentByCheckoutSession(checkoutSessionId);
+	}
+
+	async findPaymentsByUserId(userId: UserID): Promise<Array<Payment>> {
+		return this.contentRepo.findPaymentsByUserId(userId);
 	}
 
 	async getPaymentByPaymentIntent(paymentIntentId: string): Promise<Payment | null> {
