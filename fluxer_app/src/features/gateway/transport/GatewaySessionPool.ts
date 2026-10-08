@@ -23,9 +23,7 @@ import {
 import SelectedGuild from '@app/features/navigation/state/SelectedGuild';
 import SessionManager from '@app/features/platform/state/AuthSession';
 import {Logger} from '@app/features/platform/utils/AppLogger';
-import ActivityManager from '@app/features/presence/state/ActivityManager';
 import LocalPresence from '@app/features/presence/state/LocalPresence';
-import UserSettings from '@app/features/user/state/UserSettings';
 import {reaction} from 'mobx';
 
 export {BACKGROUND_RESUME_STAGGER_MS, MAX_BACKGROUND_GATEWAY_CONNECTIONS, readMaxBackgroundGatewayConnections};
@@ -58,11 +56,7 @@ class GatewaySessionPool {
 		this.disposers.push(
 			installDeferredReaction(() =>
 				reaction(
-					() => ({
-						presenceKey: LocalPresence.presenceKey,
-						activityKey: ActivityManager.activityKey,
-						activityDetectionEnabled: UserSettings.getActivityDetectionEnabled()
-					}),
+					() => LocalPresence.presenceKey,
 					() => this.syncForegroundPresence(),
 				),
 			),
@@ -308,7 +302,7 @@ class GatewaySessionPool {
 			presence.afk,
 			presence.mobile,
 			presence.custom_status,
-			UserSettings.getActivityDetectionEnabled() ? ActivityManager.getGatewayActivities() : [],
+			presence.activities,
 		);
 	}
 

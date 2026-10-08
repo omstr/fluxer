@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type {AccountPresenceIntent} from '@app/features/auth/state/AccountStorage';
+import type {GatewayPresence} from '@app/features/gateway/transport/GatewaySocket';
 import {deferUntilModulesLoaded} from '@app/features/platform/utils/DeferUntilModulesLoaded';
+import ActivityManager from '@app/features/presence/state/ActivityManager';
 import Idle from '@app/features/ui/state/Idle';
 import MobileLayout from '@app/features/ui/state/MobileLayout';
 import type {CustomStatus, GatewayCustomStatusPayload} from '@app/features/user/state/CustomStatus';
 import {customStatusToKey, normalizeCustomStatus, toGatewayCustomStatus} from '@app/features/user/state/CustomStatus';
 import type {StatusType} from '@fluxer/constants/src/StatusConstants';
 import {normalizeStatus, StatusTypes} from '@fluxer/constants/src/StatusConstants';
+import type {ActivityVisibilityLevel} from '@fluxer/constants/src/UserConstants';
+import {ActivityVisibilityLevels} from '@fluxer/constants/src/UserConstants';
+import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import {makeAutoObservable, reaction} from 'mobx';
 
 type Presence = Readonly<{
@@ -20,6 +25,8 @@ type Presence = Readonly<{
 
 export const ACCOUNT_PRESENCE_INTENT_MAX_AGE_MS = 60 * 1000;
 
+const EMPTY_ACTIVITIES: Array<UserActivity> = [];
+
 interface LocalPresenceUserSettings {
 	status: StatusType;
 	isHydrated(): boolean;
@@ -28,6 +35,8 @@ interface LocalPresenceUserSettings {
 	getCustomStatus(): CustomStatus | null;
 	getStatusResetsAt(): string | null;
 	getStatusResetsTo(): string | null;
+	getActivityDetectionEnabled(): boolean;
+	getActivityVisibility(): ActivityVisibilityLevel;
 }
 
 let userSettings: LocalPresenceUserSettings | null = null;
@@ -96,11 +105,37 @@ class LocalPresence {
 		};
 	}
 
-	getGatewayPresence(): Presence | null {
+	getGatewayPresence(): GatewayPresence | null {
 		if (!userSettings?.isHydrated() && !this.restoredIntent) {
 			return null;
 		}
-		return this.getPresence();
+		return {
+			status: this.status,
+			afk: this.afk,
+			mobile: this.mobile,
+			custom_status: toGatewayCustomStatus(this.customStatus),
+			activities: this.gatewayActivities,
+		};
+	}
+
+	isActivityDetectionEnabled(): boolean {
+		return userSettings?.getActivityDetectionEnabled() ?? true;
+	}
+
+	get gatewayActivities(): Array<UserActivity> {
+		return this.gatewayActivityMode === 'on' ? ActivityManager.getGatewayActivities() : EMPTY_ACTIVITIES;
+	}
+
+	private get gatewayActivityMode(): 'off' | 'hidden' | 'on' {
+		if (!this.isActivityDetectionEnabled()) {
+			return 'off';
+		}
+		return userSettings?.getActivityVisibility() === ActivityVisibilityLevels.NO_ONE ? 'hidden' : 'on';
+	}
+
+	private get gatewayActivityKey(): string {
+		const mode = this.gatewayActivityMode;
+		return mode === 'on' ? `${mode}:${ActivityManager.activityKey}` : mode;
 	}
 
 	handleSessionChanging(options: {clearRestoredIntent?: boolean} = {}): void {
@@ -135,7 +170,7 @@ class LocalPresence {
 		const hydrated = userSettings?.isHydrated() ? '1' : '0';
 		const afk = this.afk ? '1' : '0';
 		const mobile = this.mobile ? '1' : '0';
-		return `hydrated:${hydrated}|${this.status}|${customStatusToKey(this.customStatus)}|afk:${afk}|mobile:${mobile}`;
+		return `hydrated:${hydrated}|${this.status}|${customStatusToKey(this.customStatus)}|afk:${afk}|mobile:${mobile}|activities:${this.gatewayActivityKey}`;
 	}
 
 	private computeAfk(idleSince: number, isMobile: boolean, settings: LocalPresenceUserSettings | null): boolean {

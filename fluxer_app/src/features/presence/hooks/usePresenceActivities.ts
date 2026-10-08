@@ -3,6 +3,7 @@
 import Authentication from '@app/features/auth/state/Authentication';
 import {ActivityEmitter} from '@app/features/presence/state/ActivityEmitter';
 import ActivityManager from '@app/features/presence/state/ActivityManager';
+import LocalPresence from '@app/features/presence/state/LocalPresence';
 import Presence from '@app/features/presence/state/Presence';
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import {useCallback, useSyncExternalStore} from 'react';
@@ -28,6 +29,9 @@ function getLocalActivitiesSnapshot(): Array<UserActivity> {
 }
 
 function getCurrentUserActivitiesSnapshot(userId: string): Array<UserActivity> {
+	if (!LocalPresence.isActivityDetectionEnabled()) {
+		return EMPTY_ACTIVITIES;
+	}
 	const localActivities = getLocalActivitiesSnapshot();
 	if (localActivities.length > 0) {
 		return localActivities;

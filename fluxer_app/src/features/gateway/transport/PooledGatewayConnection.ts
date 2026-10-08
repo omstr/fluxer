@@ -87,7 +87,6 @@ import ChannelFrecency from '@app/features/channel/state/ChannelFrecency';
 import ForumPosts from '@app/features/forum/state/ForumPosts';
 import ForumReadState from '@app/features/forum/state/ForumReadState';
 import NavigationSideEffects from '@app/features/navigation/state/NavigationSideEffects';
-import ActivityManager from '@app/features/presence/state/ActivityManager';
 import ChannelThreads from '@app/features/threads/state/ChannelThreads';
 import ThreadGuilds from '@app/features/threads/state/ThreadGuilds';
 import ThreadPanel from '@app/features/threads/state/ThreadPanel';
@@ -487,6 +486,7 @@ export class PooledGatewayConnection {
 							afk: presence.afk,
 							mobile: presence.mobile,
 							custom_status: presence.custom_status,
+							activities: presence.activities,
 						},
 			initialGuildId: null,
 			isMobileLayout: () => MobileLayout.isMobileLayout(),
@@ -563,7 +563,13 @@ export class PooledGatewayConnection {
 		}
 		const presence = LocalPresence.getGatewayPresence();
 		if (presence !== null) {
-			socket.updatePresence(presence.status, presence.afk, presence.mobile, presence.custom_status);
+			socket.updatePresence(
+				presence.status,
+				presence.afk,
+				presence.mobile,
+				presence.custom_status,
+				presence.activities,
+			);
 		}
 	}
 
@@ -593,7 +599,7 @@ export class PooledGatewayConnection {
 					afk: presence.afk,
 					mobile: presence.mobile,
 					custom_status: presence.custom_status,
-					activities: ActivityManager.getGatewayActivities(),
+					activities: presence.activities,
 				},
 			}),
 			compression,

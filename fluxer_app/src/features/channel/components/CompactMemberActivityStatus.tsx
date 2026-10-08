@@ -23,6 +23,26 @@ interface CompactMemberActivityStatusProps {
 	userId: string;
 }
 
+const LISTENING_TO_ACTIVITY_DESCRIPTOR = msg({
+	message: 'Listening to {activityName}',
+	comment: 'Member list tooltip for a listening activity. {activityName} is the activity name.',
+});
+
+const WATCHING_ACTIVITY_DESCRIPTOR = msg({
+	message: 'Watching {activityName}',
+	comment: 'Member list tooltip for a watching activity. {activityName} is the activity name.',
+});
+
+const COMPETING_IN_ACTIVITY_DESCRIPTOR = msg({
+	message: 'Competing in {activityName}',
+	comment: 'Member list tooltip for a competing activity. {activityName} is the activity name.',
+});
+
+const PLAYING_ACTIVITY_DESCRIPTOR = msg({
+	message: 'Playing {activityName}',
+	comment: 'Member list tooltip for a playing activity. {activityName} is the activity name.',
+});
+
 function hasVisibleCustomStatus(status: CustomStatus | null | undefined): boolean {
 	const normalized = normalizeCustomStatus(status ?? null);
 	if (!normalized || isCustomStatusExpired(normalized)) {
@@ -61,13 +81,13 @@ export function CompactMemberActivityStatus({className, customStatus, userId}: C
 		if (!line) return null;
 		switch (line.kind) {
 			case 'listening':
-				return i18n._(msg`Listening to ${line.text}`);
+				return i18n._(LISTENING_TO_ACTIVITY_DESCRIPTOR, {activityName: line.text});
 			case 'watching':
-				return i18n._(msg`Watching ${line.text}`);
+				return i18n._(WATCHING_ACTIVITY_DESCRIPTOR, {activityName: line.text});
 			case 'competing':
-				return i18n._(msg`Competing in ${line.text}`);
+				return i18n._(COMPETING_IN_ACTIVITY_DESCRIPTOR, {activityName: line.text});
 			default:
-				return i18n._(msg`Playing ${line.text}`);
+				return i18n._(PLAYING_ACTIVITY_DESCRIPTOR, {activityName: line.text});
 		}
 	}, [i18n, line]);
 	const isOverflowing = useTextOverflow(containerRef, {content: line?.text ?? null, measureTextRange: true});

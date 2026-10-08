@@ -17,6 +17,7 @@ import AppStorage, {flushAppStorageWrites} from '@app/features/platform/state/Pe
 import {http} from '@app/features/platform/transport/RestTransport';
 import {HttpError} from '@app/features/platform/types/EndpointError';
 import {Logger} from '@app/features/platform/utils/AppLogger';
+import {ActivityEmitter} from '@app/features/presence/state/ActivityEmitter';
 import LocalPresence, {setLocalPresenceUserSettings} from '@app/features/presence/state/LocalPresence';
 import Theme from '@app/features/theme/state/Theme';
 import MobileLayout from '@app/features/ui/state/MobileLayout';
@@ -912,7 +913,9 @@ class UserSettingsState {
 	}
 
 	async setActivityDetectionEnabled(value: boolean): Promise<void> {
-		return this.setSubPreference('activityDetectionEnabled', value);
+		const flush = this.setSubPreference('activityDetectionEnabled', value);
+		ActivityEmitter.emitPresenceChange('local');
+		return flush;
 	}
 
 	private markSyncedPreferenceFieldDirty(field: SyncedPreferencesField): void {
