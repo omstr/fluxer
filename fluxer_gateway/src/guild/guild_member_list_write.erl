@@ -131,7 +131,6 @@ member_list_presence_fields(Presence) ->
     {
         maps:get(<<"status">>, Presence, <<"offline">>),
         maps:get(<<"custom_status">>, Presence, null),
-				maps:get(<<"activities">>, Presence, null),
         maps:get(<<"mobile">>, Presence, false)
     }.
 
@@ -636,6 +635,10 @@ presence_change_resyncs_lists_on_status_custom_status_or_mobile_test() ->
     ?assert(presence_change_resyncs_lists(Online, Online#{<<"mobile">> => true})),
     ?assert(presence_change_resyncs_lists(#{}, Online)),
     ?assertNot(presence_change_resyncs_lists(Online, Online#{<<"afk">> => true})),
+    ?assertNot(presence_change_resyncs_lists(Online, Online#{<<"activities">> => [#{}]})),
+    ?assertNot(
+        presence_change_resyncs_lists(Online, Online#{<<"activity_visibility">> => 2})
+    ),
     ?assertNot(presence_change_resyncs_lists(#{}, #{<<"status">> => <<"offline">>})).
 
 connection_sync_delay_defaults_test() ->

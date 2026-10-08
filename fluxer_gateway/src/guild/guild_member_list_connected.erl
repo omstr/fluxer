@@ -45,14 +45,18 @@ resolve_presence_for_user(State, UserId) ->
 -spec add_presence_to_member(map(), guild_state()) -> map().
 add_presence_to_member(Member, State) ->
     Presence = resolve_presence_for_member(presence_context(State), Member),
-    Member#{<<"presence">> => Presence}.
+    Member#{<<"presence">> => strip_member_list_presence(Presence)}.
 
 -spec add_presence_to_member(map(), user_id(), map()) -> map().
 add_presence_to_member(Member, UserId, PresenceCtx) when is_integer(UserId), UserId > 0 ->
     Presence = resolve_effective_presence_for_user(PresenceCtx, UserId),
-    Member#{<<"presence">> => Presence};
+    Member#{<<"presence">> => strip_member_list_presence(Presence)};
 add_presence_to_member(Member, _UserId, _PresenceCtx) ->
     Member#{<<"presence">> => default_presence()}.
+
+-spec strip_member_list_presence(map()) -> map().
+strip_member_list_presence(Presence) ->
+    maps:without([<<"activities">>, <<"activity_visibility">>], Presence).
 
 -spec presence_context(guild_state()) -> map().
 presence_context(State) ->

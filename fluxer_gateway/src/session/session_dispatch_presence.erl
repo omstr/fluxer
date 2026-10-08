@@ -82,8 +82,7 @@ filter_activities(Data, State) when is_map(Data) ->
                 TargetId =:= SelfId orelse
                     Visibility =:= 0 orelse
                     (Visibility =:= 1 andalso
-                        (relationship_allows_presence(TargetId, Relationships) orelse
-                            is_group_dm_recipient(TargetId, State))),
+                        relationship_allows_presence(TargetId, Relationships)),
             Stripped =
                 case Keep of
                     true -> Data;
@@ -512,10 +511,13 @@ filter_activities_keeps_activities_for_friend_test() ->
     ?assertEqual([visibility_activity()], maps:get(<<"activities">>, Result)),
     ?assertEqual(false, maps:is_key(<<"activity_visibility">>, Result)).
 
-filter_activities_keeps_activities_for_group_dm_recipient_test() ->
+filter_activities_strips_activities_for_dm_partner_without_friendship_test() ->
     State = buffering_test_state(),
-    Result = filter_activities(visibility_data(<<"3">>, 1), State),
-    ?assertEqual([visibility_activity()], maps:get(<<"activities">>, Result)).
+    Data = visibility_data(<<"3">>, 1),
+    ?assertEqual(true, is_group_dm_recipient(3, State)),
+    Result = filter_activities(Data, State),
+    ?assertEqual(false, maps:is_key(<<"activities">>, Result)),
+    ?assertEqual(false, maps:is_key(<<"activity_visibility">>, Result)).
 
 filter_activities_strips_activities_for_non_friend_test() ->
     State = (buffering_test_state())#{relationships => #{4 => 1}},
