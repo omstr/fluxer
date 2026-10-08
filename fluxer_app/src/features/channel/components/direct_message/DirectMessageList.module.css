@@ -575,6 +575,24 @@
 	max-width: 100%;
 }
 
+.dmItemActivity {
+	display: flex;
+	align-items: center;
+	gap: 0.3125rem;
+	overflow: hidden;
+	width: fit-content;
+	max-width: 100%;
+	color: color-mix(in srgb, var(--text-primary-muted) 85%, transparent);
+	font-size: 0.6875rem;
+	line-height: 1rem;
+	font-weight: 500;
+	margin-top: -0.0625rem;
+}
+
+.dmItemActivity svg {
+	opacity: 0.85;
+}
+
 :global(:where(html.window-focused, html.unfocused-fully-interactive):not(.window-focus-activation-guard))
 	.dmItem:hover
 	.dmItemCustomStatus,

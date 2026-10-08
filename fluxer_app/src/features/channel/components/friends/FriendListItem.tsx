@@ -4,6 +4,7 @@ import {ConfirmModal} from '@app/features/app/components/dialogs/ConfirmModal';
 import {CustomStatusDisplay} from '@app/features/app/components/shared/custom_status_display/CustomStatusDisplay';
 import {getStatusTypeLabel} from '@app/features/app/constants/AppConstants';
 import * as PrivateChannelCommands from '@app/features/channel/commands/PrivateChannelCommands';
+import {CompactActivityLine, useMemberActivityLine} from '@app/features/channel/components/CompactMemberActivityStatus';
 import {ActionButton} from '@app/features/channel/components/friends/ActionButton';
 import styles from '@app/features/channel/components/friends/FriendListItem.module.css';
 import {CANCEL_DESCRIPTOR, MORE_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
@@ -334,6 +335,11 @@ export const FriendListItem: React.FC<FriendListItemProps> = observer((props) =>
 		userId,
 		enabled: relationshipType === RelationshipTypes.FRIEND,
 	});
+	const activityLine = useMemberActivityLine({
+		customStatus,
+		enabled: relationshipType === RelationshipTypes.FRIEND,
+		userId,
+	});
 	if (!user) return null;
 	const actions = getFriendActions();
 	const hasCustomStatus = customStatus !== null;
@@ -378,6 +384,8 @@ export const FriendListItem: React.FC<FriendListItemProps> = observer((props) =>
 								animateOnParentHover
 								data-flx="channel.friends.friend-list-item.friend-subtext"
 							/>
+						) : activityLine ? (
+							<CompactActivityLine className={styles.friendSubtext} line={activityLine} />
 						) : (
 							<span
 								className={clsx(styles.friendSubtext, getStatusClassName())}

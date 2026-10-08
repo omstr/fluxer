@@ -8,6 +8,7 @@ import {GroupDMAvatar} from '@app/features/app/components/shared/GroupDMAvatar';
 import {useChannelHoverPreload} from '@app/features/app/hooks/useChannelHoverPreload';
 import {useContextMenuHoverState} from '@app/features/app/hooks/useContextMenuHoverState';
 import {UserTag} from '@app/features/channel/components/ChannelUserTag';
+import {CompactMemberActivityStatus} from '@app/features/channel/components/CompactMemberActivityStatus';
 import styles from '@app/features/channel/components/direct_message/DirectMessageList.module.css';
 import type {InviteCandidate} from '@app/features/channel/components/direct_message/DMListHelpers';
 import {getDefaultInviteChannelId} from '@app/features/channel/components/direct_message/DMListHelpers';
@@ -419,15 +420,18 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 									)}
 								</span>
 								{!isGroupDM && recipient && !messagePreview && (
-									<CustomStatusDisplay
-										userId={recipient.id}
-										className={styles.dmItemCustomStatus}
-										showText={true}
-										showTooltip
-										tooltipPosition="bottom"
-										animateOnParentHover
-										data-flx="channel.direct-message.dm-list-item.dm-item-custom-status"
-									/>
+									<>
+										<CustomStatusDisplay
+											userId={recipient.id}
+											className={styles.dmItemCustomStatus}
+											showText={true}
+											showTooltip
+											tooltipPosition="bottom"
+											animateOnParentHover
+											data-flx="channel.direct-message.dm-list-item.dm-item-custom-status"
+										/>
+										<CompactMemberActivityStatus userId={recipient.id} className={styles.dmItemActivity} />
+									</>
 								)}
 								{isGroupDM && (
 									<span
@@ -583,15 +587,18 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 								)}
 							</span>
 							{!isGroupDM && recipient && !messagePreview && (
-								<CustomStatusDisplay
-									userId={recipient.id}
-									className={styles.dmItemCustomStatus}
-									showText={true}
-									showTooltip
-									tooltipPosition="bottom"
-									animateOnParentHover
-									data-flx="channel.direct-message.dm-list-item.dm-item-custom-status--2"
-								/>
+								<>
+									<CustomStatusDisplay
+										userId={recipient.id}
+										className={styles.dmItemCustomStatus}
+										showText={true}
+										showTooltip
+										tooltipPosition="bottom"
+										animateOnParentHover
+										data-flx="channel.direct-message.dm-list-item.dm-item-custom-status--2"
+									/>
+									<CompactMemberActivityStatus userId={recipient.id} className={styles.dmItemActivity} />
+								</>
 							)}
 							{isGroupDM && (
 								<span

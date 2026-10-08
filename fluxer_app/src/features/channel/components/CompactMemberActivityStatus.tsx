@@ -23,6 +23,22 @@ interface CompactMemberActivityStatusProps {
 	userId: string;
 }
 
+export interface MemberActivityLine {
+	kind: ActivityMemberListKind;
+	text: string;
+}
+
+interface UseMemberActivityLineOptions {
+	customStatus?: CustomStatus | null;
+	enabled?: boolean;
+	userId: string;
+}
+
+interface CompactActivityLineProps {
+	className?: string;
+	line: MemberActivityLine;
+}
+
 const LISTENING_TO_ACTIVITY_DESCRIPTOR = msg({
 	message: 'Listening to {activityName}',
 	comment: 'Member list tooltip for a listening activity. {activityName} is the activity name.',
@@ -65,20 +81,37 @@ function ActivityKindIcon({kind}: {kind: ActivityMemberListKind}) {
 	}
 }
 
-export function CompactMemberActivityStatus({className, customStatus, userId}: CompactMemberActivityStatusProps) {
-	const {i18n} = useLingui();
-	const containerRef = useRef<HTMLDivElement>(null);
+export function useMemberActivityLine({
+	customStatus,
+	enabled = true,
+	userId,
+}: UseMemberActivityLineOptions): MemberActivityLine | null {
 	const shouldFetchCustomStatus = customStatus === undefined;
 	const presenceCustomStatus = usePresenceCustomStatus({
 		userId,
 		enabled: shouldFetchCustomStatus,
 	});
 	const resolvedCustomStatus = shouldFetchCustomStatus ? presenceCustomStatus : (customStatus ?? null);
-	const activities = usePresenceActivities({userId, enabled: !hasVisibleCustomStatus(resolvedCustomStatus)});
+	const activities = usePresenceActivities({
+		userId,
+		enabled: enabled && !hasVisibleCustomStatus(resolvedCustomStatus),
+	});
 	const activity = activities[0] ?? null;
-	const line = useMemo(() => (activity ? formatActivityMemberListLine(activity) : null), [activity]);
+	return useMemo(() => (activity ? formatActivityMemberListLine(activity) : null), [activity]);
+}
+
+export function CompactMemberActivityStatus({className, customStatus, userId}: CompactMemberActivityStatusProps) {
+	const line = useMemberActivityLine({customStatus, userId});
+	if (!line) {
+		return null;
+	}
+	return <CompactActivityLine className={className} line={line} />;
+}
+
+export function CompactActivityLine({className, line}: CompactActivityLineProps) {
+	const {i18n} = useLingui();
+	const containerRef = useRef<HTMLDivElement>(null);
 	const tooltipText = useMemo(() => {
-		if (!line) return null;
 		switch (line.kind) {
 			case 'listening':
 				return i18n._(LISTENING_TO_ACTIVITY_DESCRIPTOR, {activityName: line.text});
@@ -90,11 +123,7 @@ export function CompactMemberActivityStatus({className, customStatus, userId}: C
 				return i18n._(PLAYING_ACTIVITY_DESCRIPTOR, {activityName: line.text});
 		}
 	}, [i18n, line]);
-	const isOverflowing = useTextOverflow(containerRef, {content: line?.text ?? null, measureTextRange: true});
-
-	if (hasVisibleCustomStatus(resolvedCustomStatus) || !line) {
-		return null;
-	}
+	const isOverflowing = useTextOverflow(containerRef, {content: line.text, measureTextRange: true});
 
 	const content = (
 		<div
