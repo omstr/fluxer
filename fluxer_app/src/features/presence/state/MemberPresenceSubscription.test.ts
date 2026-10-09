@@ -12,8 +12,8 @@ vi.mock('@app/features/gateway/transport/GatewayConnection', () => ({
 type MemberPresenceSubscriptionInternals = {
 	touchMember(guildId: string, userId: string): void;
 	unsubscribe(guildId: string, userId: string): void;
-	getSubscribedMembers(guildId: string): Array<string>;
 	clearAll(): void;
+	subscriptions: Map<string, Map<string, number>>;
 	subscriptionRefs: Map<string, number>;
 	unsubscribeTimeouts: Map<string, number>;
 };
@@ -44,7 +44,7 @@ describe('MemberPresenceSubscription', () => {
 			store.touchMember(guildId, `user-${index}`);
 		}
 
-		expect(store.getSubscribedMembers(guildId)).not.toContain(evictedUserId);
+		expect(store.subscriptions.get(guildId)?.has(evictedUserId) ?? false).toBe(false);
 		expect(store.subscriptionRefs.get(`${guildId}:${evictedUserId}`)).toBe(1);
 
 		store.unsubscribe(guildId, evictedUserId);
@@ -57,6 +57,6 @@ describe('MemberPresenceSubscription', () => {
 		vi.advanceTimersByTime(1_500);
 
 		expect(store.subscriptionRefs.has(`${guildId}:${evictedUserId}`)).toBe(false);
-		expect(store.getSubscribedMembers(guildId)).not.toContain(evictedUserId);
+		expect(store.subscriptions.get(guildId)?.has(evictedUserId) ?? false).toBe(false);
 	});
 });

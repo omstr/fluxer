@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {StatusTypes} from '@fluxer/constants/src/StatusConstants';
+import {ActivityVisibilityLevels} from '@fluxer/constants/src/UserConstants';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 const IDLE_THRESHOLD_PASSED_MS = 11 * 60 * 1000;
@@ -28,6 +29,8 @@ function hydratedOnlineSettings() {
 		getCustomStatus: () => null,
 		getStatusResetsAt: () => null,
 		getStatusResetsTo: () => null,
+		getActivityDetectionEnabled: () => true,
+		getActivityVisibility: () => ActivityVisibilityLevels.EVERYONE,
 	};
 }
 

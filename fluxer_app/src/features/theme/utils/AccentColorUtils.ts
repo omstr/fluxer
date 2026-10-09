@@ -7,7 +7,7 @@ import {DEFAULT_ACCENT_COLOR} from '@fluxer/constants/src/AppConstants';
 
 type RawAccentColor = number | null | undefined;
 
-function getAccentColorHex(rawAccentColor?: RawAccentColor): string | null {
+export function getAccentColorHex(rawAccentColor?: RawAccentColor): string | null {
 	if (rawAccentColor == null) {
 		return null;
 	}
