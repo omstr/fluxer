@@ -23,7 +23,7 @@ type Presence = Readonly<{
 	custom_status: GatewayCustomStatusPayload | null;
 }>;
 
-export const ACCOUNT_PRESENCE_INTENT_MAX_AGE_MS = 60 * 1000;
+const ACCOUNT_PRESENCE_INTENT_MAX_AGE_MS = 60 * 1000;
 
 const EMPTY_ACTIVITIES: Array<UserActivity> = [];
 
@@ -58,6 +58,10 @@ class LocalPresence {
 		deferUntilModulesLoaded(() => {
 			reaction(
 				() => MobileLayout.isMobileLayout(),
+				() => this.updatePresence(),
+			);
+			reaction(
+				() => Idle.isIdle(),
 				() => this.updatePresence(),
 			);
 		});

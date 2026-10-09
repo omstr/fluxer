@@ -148,54 +148,6 @@ class MemberPresenceSubscription {
 		this.unsubscribeTimeouts.set(key, timeoutId);
 	}
 
-	setActiveGuild(guildId: string): void {
-		if (this.activeGuildId === guildId) {
-			return;
-		}
-		const previous = this.activeGuildId;
-		this.activeGuildId = guildId;
-		if (previous) {
-			this.syncActiveFlagImmediate(previous, false);
-		}
-		this.syncActiveFlagImmediate(guildId, true);
-		this.scheduleSyncToGateway(guildId);
-		this.bumpVersion();
-	}
-
-	getSubscribedMembers(guildId: string): Array<string> {
-		const guildSubs = this.subscriptions.get(guildId);
-		if (!guildSubs) {
-			return [];
-		}
-		return Array.from(guildSubs.keys());
-	}
-
-	clearGuild(guildId: string): void {
-		for (const [key, timeoutId] of this.unsubscribeTimeouts) {
-			if (key.startsWith(`${guildId}:`)) {
-				clearTimeout(timeoutId);
-				this.unsubscribeTimeouts.delete(key);
-			}
-		}
-		for (const key of this.subscriptionRefs.keys()) {
-			if (key.startsWith(`${guildId}:`)) {
-				this.subscriptionRefs.delete(key);
-			}
-		}
-		const hadSubscriptions = this.subscriptions.has(guildId);
-		const wasActiveGuild = this.activeGuildId === guildId;
-		this.subscriptions.delete(guildId);
-		this.syncPruneInterval();
-		if (hadSubscriptions) {
-			this.syncToGatewayImmediate(guildId);
-			this.bumpVersion();
-		}
-		if (wasActiveGuild) {
-			this.activeGuildId = null;
-			this.syncActiveFlagImmediate(guildId, false);
-		}
-	}
-
 	clearAll(): void {
 		for (const timeoutId of this.unsubscribeTimeouts.values()) {
 			clearTimeout(timeoutId);
@@ -300,16 +252,6 @@ class MemberPresenceSubscription {
 		for (const guildId of guildsToSync) {
 			this.syncToGatewayImmediate(guildId);
 		}
-	}
-
-	private syncActiveFlagImmediate(guildId: string, active: boolean): void {
-		const socket = GatewayConnection.socket;
-		if (!socket) return;
-		socket.updateGuildSubscriptions({
-			subscriptions: {
-				[guildId]: {active, sync: active ? true : undefined},
-			},
-		});
 	}
 
 	private syncToGatewayImmediate(guildId: string): void {

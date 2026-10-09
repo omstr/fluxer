@@ -354,6 +354,8 @@ export function mapUserSettingsToResponse(params: {settings: UserSettings}): Use
 		profile_privacy: settings.profilePrivacy,
 		default_share_voice_activity: settings.defaultShareVoiceActivity,
 		activity_visibility: settings.activityVisibility,
+		privacy_setup_version: settings.privacySetupVersion,
+		privacy_setup_completed_at: settings.privacySetupCompletedAt?.toISOString() ?? null,
 	};
 }
 

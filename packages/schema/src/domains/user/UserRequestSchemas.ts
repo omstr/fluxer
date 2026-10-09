@@ -399,6 +399,14 @@ export const UserSettingsUpdateRequest = z
 			ActivityVisibilityLevelSchema,
 			'Restricts who can see the activities detected on your devices',
 		),
+		privacy_setup_version: z
+			.number()
+			.int()
+			.min(1)
+			.max(1000)
+			.describe(
+				'Version of the privacy setup the user just reviewed. The server also records privacy_setup_completed_at as the current time.',
+			),
 		synced_preferences: z
 			.string()
 			.max(SYNCED_PREFERENCES_MAX_ENCODED_LENGTH)

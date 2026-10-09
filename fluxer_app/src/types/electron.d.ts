@@ -566,10 +566,7 @@ export interface ElectronAPI {
 	setDesktopDisableHardwareAcceleration?(
 		options: SetDesktopTroubleshootingDisableHardwareAccelerationOptions,
 	): Promise<DesktopTroubleshootingSettings>;
-	desktopTroubleshootingReload?(): Promise<void>;
-	desktopTroubleshootingResetAppData?(options?: {confirm?: boolean}): Promise<void>;
 	getStreamerModeCaptureAppStatus?(): Promise<StreamerModeCaptureAppStatus>;
-	popupHelpMenu?(): Promise<void>;
 	getInitialDeepLink(): Promise<string | null>;
 	onDeepLink(callback: (url: string) => void): () => void;
 	onTextareaContextMenu(callback: (params: TextareaContextMenuParams) => void): () => void;
@@ -582,7 +579,6 @@ export interface ElectronAPI {
 	onSpellcheckEngineResolved?(callback: (info: SpellcheckResolvedEngineInfo) => void): () => void;
 	spellcheckGetAvailableLanguages(): Promise<Array<string>>;
 	spellcheckGetBundledDictionaries?(): Promise<Array<SpellcheckBundledDictionary>>;
-	spellcheckSuggest?(word: string): Promise<Array<string>>;
 	spellcheckSetState(state: Partial<SpellcheckState>): Promise<SpellcheckState>;
 	autostartEnable(): Promise<void>;
 	autostartDisable(): Promise<void>;
@@ -590,7 +586,6 @@ export interface ElectronAPI {
 	autostartIsInitialized(): Promise<boolean>;
 	autostartMarkInitialized(): Promise<void>;
 	globalKeyHookStart(): Promise<boolean>;
-	globalKeyHookIsRunning?(): Promise<boolean>;
 	globalKeyHookStop(): Promise<void>;
 	globalKeyHookRegister?(options: GlobalKeyHookRegisterOptions): Promise<void>;
 	globalKeyHookUnregister?(id: string): Promise<void>;
@@ -632,7 +627,6 @@ export interface ElectronAPI {
 	setTrayRuntimeState?(state: Partial<TrayRuntimeStatePayload>): void;
 	acquireStreamingPriority?(): void;
 	releaseStreamingPriority?(): void;
-	resetStreamingPriority?(): void;
 	getStreamingPriorityDiagnostics?(): Promise<StreamingPriorityDiagnostics>;
 	onTrayAction?(callback: (payload: TrayActionPayload) => void): () => void;
 	onRpcActivityUpdate?(callback: (payload: RpcActivityUpdatePayload) => void): () => void;
@@ -749,11 +743,6 @@ export interface VirtmicLinkOptions {
 	workaround?: boolean;
 }
 
-export interface VirtmicSystemLinkOptions extends VirtmicLinkOptions {
-	onlySpeakers?: boolean;
-	onlyDefaultSpeakers?: boolean;
-}
-
 export interface VirtmicApi {
 	getAvailability(): Promise<VirtmicAvailability>;
 	listTargets(options?: {granular?: boolean}): Promise<{
@@ -762,9 +751,6 @@ export interface VirtmicApi {
 		availability: VirtmicAvailability;
 	}>;
 	getRoutingGraph(): Promise<VirtmicRoutingGraphResult>;
-	startInclude(include: Array<VirtmicNode>, options?: VirtmicLinkOptions): Promise<boolean>;
-	startSystem(exclude: Array<VirtmicNode>, options?: VirtmicSystemLinkOptions): Promise<boolean>;
-	resolveWindowPid(sourceId: string): Promise<number | null>;
 	stop(): Promise<void>;
 }
 

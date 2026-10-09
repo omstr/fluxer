@@ -114,6 +114,7 @@ export interface UserSettings {
 	profilePrivacy: ProfilePrivacyLevel;
 	activityVisibility: ActivityVisibilityLevel;
 	defaultShareVoiceActivity: boolean;
+	privacySetupVersion: number | null;
 	guildFolders: Array<GuildFolder>;
 	customStatus: CustomStatus | null;
 	afkTimeout: number;
@@ -303,6 +304,7 @@ class UserSettingsState {
 	profilePrivacy: ProfilePrivacyLevel = ProfilePrivacyLevels.ALL_GUILDS;
 	activityVisibility: ActivityVisibilityLevel = ActivityVisibilityLevels.EVERYONE;
 	defaultShareVoiceActivity: boolean = true;
+	privacySetupVersion: number | null = null;
 	guildFolders: Array<GuildFolder> = [];
 	customStatus: CustomStatus | null = null;
 	afkTimeout: number = 600;
@@ -394,10 +396,6 @@ class UserSettingsState {
 		writePersistedSyncedPreferences(SYNCED_PREFERENCES_WIRE_KEY, this.wireSyncedPreferences);
 	}
 
-	getFlags(): number {
-		return this.flags;
-	}
-
 	getStatus(): StatusType {
 		return this.status;
 	}
@@ -414,24 +412,12 @@ class UserSettingsState {
 		return this.timeFormat;
 	}
 
-	getGuildPositions(): ReadonlyArray<string> {
-		return this.guildFolders.flatMap((folder) => folder.guildIds);
-	}
-
 	getLocale(): string {
 		return this.locale;
 	}
 
 	applyLocalLocale(locale: string): void {
 		this.locale = applyLocaleChange(locale);
-	}
-
-	getRestrictedGuilds(): ReadonlyArray<string> {
-		return this.restrictedGuilds;
-	}
-
-	getBotRestrictedGuilds(): ReadonlyArray<string> {
-		return this.botRestrictedGuilds;
 	}
 
 	getBotDefaultGuildsRestricted(): boolean {
@@ -444,10 +430,6 @@ class UserSettingsState {
 
 	getInlineAttachmentMedia(): boolean {
 		return this.inlineAttachmentMedia;
-	}
-
-	getInlineEmbedMedia(): boolean {
-		return this.inlineEmbedMedia;
 	}
 
 	getMotionPreferencesInput(): MotionPreferencesInput {
@@ -492,10 +474,6 @@ class UserSettingsState {
 		return selectEffectiveAnimateStickers(createMotionPreferencesContext(this.getMotionPreferencesInput()));
 	}
 
-	getRenderSpoilers(): number {
-		return this.renderSpoilers;
-	}
-
 	getMessageDisplayCompact(): boolean {
 		if (MobileLayout.isMobileLayout()) {
 			return false;
@@ -531,8 +509,8 @@ class UserSettingsState {
 		return this.defaultShareVoiceActivity;
 	}
 
-	getGuildFolders(): ReadonlyArray<GuildFolder> {
-		return this.guildFolders;
+	getPrivacySetupVersion(): number | null {
+		return this.privacySetupVersion;
 	}
 
 	getCustomStatus(): CustomStatus | null {
@@ -541,10 +519,6 @@ class UserSettingsState {
 
 	getAfkTimeout(): number {
 		return this.afkTimeout;
-	}
-
-	getDeveloperMode(): boolean {
-		return this.developerMode;
 	}
 
 	getTrustedDomains(): ReadonlyArray<string> {
@@ -559,28 +533,12 @@ class UserSettingsState {
 		return this.defaultHideMutedChannels;
 	}
 
-	getSensitiveContentFriendDmFilter(): number {
-		return this.sensitiveContentFriendDmFilter;
-	}
-
-	getSensitiveContentNonFriendDmFilter(): number {
-		return this.sensitiveContentNonFriendDmFilter;
-	}
-
-	getSensitiveContentGuildFilter(): number {
-		return this.sensitiveContentGuildFilter;
-	}
-
 	getSuppressUnprivilegedSelfMentions(): boolean {
 		return this.suppressUnprivilegedSelfMentions;
 	}
 
 	getSuppressUnprivilegedSelfMentionsBypassUserIds(): ReadonlyArray<string> {
 		return this.suppressUnprivilegedSelfMentionsBypassUserIds;
-	}
-
-	getSuppressUnprivilegedSelfMentionBypassUserIds(): ReadonlyArray<string> {
-		return this.getSuppressUnprivilegedSelfMentionsBypassUserIds();
 	}
 
 	getStaffDmAccessUserIds(): ReadonlyArray<string> {
@@ -754,6 +712,7 @@ class UserSettingsState {
 		if (camelCaseSettings.defaultShareVoiceActivity !== undefined) {
 			this.defaultShareVoiceActivity = camelCaseSettings.defaultShareVoiceActivity;
 		}
+		this.privacySetupVersion = camelCaseSettings.privacySetupVersion ?? null;
 		this.guildFolders = camelCaseSettings.guildFolders.map((folder) => ({
 			...folder,
 			flags: folder.flags ?? 0,
@@ -846,6 +805,7 @@ class UserSettingsState {
 			profilePrivacy: this.profilePrivacy,
 			activityVisibility: this.activityVisibility,
 			defaultShareVoiceActivity: this.defaultShareVoiceActivity,
+			privacySetupVersion: this.privacySetupVersion,
 			guildFolders: this.guildFolders.map((folder) => ({
 				...folder,
 				guildIds: [...folder.guildIds],

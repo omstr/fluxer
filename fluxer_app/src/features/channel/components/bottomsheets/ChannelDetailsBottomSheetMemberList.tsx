@@ -81,7 +81,7 @@ function addVisibleMember(params: {
 	groupedItems.get(groupId)?.push(member);
 }
 
-export const SkeletonMemberItem = () => (
+const SkeletonMemberItem = () => (
 	<div
 		className={styles.skeletonItem}
 		data-flx="channel.channel-details-bottom-sheet-member-list.skeleton-member-item.skeleton-item"
@@ -105,7 +105,7 @@ export const SkeletonMemberItem = () => (
 		</div>
 	</div>
 );
-export const MobileMemberListItem = observer(
+const MobileMemberListItem = observer(
 	({
 		guild,
 		channelId,
