@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {ACTIVITY_DETECTION_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
+import {GENERAL_DESCRIPTOR} from '@app/features/i18n/utils/CommonMessageDescriptors';
 import type {SectionDefinition} from '@app/features/user/components/settings_utils/section_registry/SectionRegistryTypes';
+import { msg } from '@lingui/core/macro';
+
+const ACTIVITY_DETECTION_DESCRIPTOR = msg({
+	message: 'Activity detection',
+	comment: 'Section label in the Activity & Games settings tab.',
+});
 
 export const activityGamesSections = [
 	{

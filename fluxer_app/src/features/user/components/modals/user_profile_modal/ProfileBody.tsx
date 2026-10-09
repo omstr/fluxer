@@ -347,7 +347,7 @@ export const ProfileBody: React.FC<ProfileBodyProps> = observer(
 			</div>
 		);
 		const renderActivityPresence = () => {
-			return <ProfileRichPresence userId={user.id} showEmptyState />;
+			return <ProfileRichPresence userId={user.id} showEmptyState expanded={true} />;
 		};
 		const renderActiveTabContent = () => {
 			switch (activeTab) {

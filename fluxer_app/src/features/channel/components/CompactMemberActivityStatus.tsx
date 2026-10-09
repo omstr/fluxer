@@ -11,6 +11,8 @@ import {useTextOverflow} from '@app/features/ui/hooks/useTextOverflow';
 import {Tooltip} from '@app/features/ui/tooltip/Tooltip';
 import type {CustomStatus} from '@app/features/user/state/CustomStatus';
 import {isCustomStatusExpired, normalizeCustomStatus} from '@app/features/user/state/CustomStatus';
+import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
+import type {I18n} from '@lingui/core';
 import {msg} from '@lingui/core/macro';
 import {useLingui} from '@lingui/react/macro';
 import {GameControllerIcon, HeadphonesIcon, TelevisionIcon, TrophyIcon} from '@phosphor-icons/react';
@@ -23,7 +25,14 @@ interface CompactMemberActivityStatusProps {
 	userId: string;
 }
 
+export interface MemberActivityIcon {
+	kind: ActivityMemberListKind;
+	label: string;
+}
+
 export interface MemberActivityLine {
+	extraCount: number;
+	icons: Array<MemberActivityIcon>;
 	kind: ActivityMemberListKind;
 	text: string;
 }
@@ -38,6 +47,9 @@ interface CompactActivityLineProps {
 	className?: string;
 	line: MemberActivityLine;
 }
+
+const MAX_DISPLAY_ACTIVITIES = 4;
+const MAX_ACTIVITY_ICONS = 2;
 
 const LISTENING_TO_ACTIVITY_DESCRIPTOR = msg({
 	message: 'Listening to {activityName}',
@@ -58,6 +70,19 @@ const PLAYING_ACTIVITY_DESCRIPTOR = msg({
 	message: 'Playing {activityName}',
 	comment: 'Member list tooltip for a playing activity. {activityName} is the activity name.',
 });
+
+function activityTooltipText(i18n: I18n, kind: ActivityMemberListKind, activityName: string): string {
+	switch (kind) {
+		case 'listening':
+			return i18n._(LISTENING_TO_ACTIVITY_DESCRIPTOR, {activityName});
+		case 'watching':
+			return i18n._(WATCHING_ACTIVITY_DESCRIPTOR, {activityName});
+		case 'competing':
+			return i18n._(COMPETING_IN_ACTIVITY_DESCRIPTOR, {activityName});
+		default:
+			return i18n._(PLAYING_ACTIVITY_DESCRIPTOR, {activityName});
+	}
+}
 
 function hasVisibleCustomStatus(status: CustomStatus | null | undefined): boolean {
 	const normalized = normalizeCustomStatus(status ?? null);
@@ -81,6 +106,23 @@ function ActivityKindIcon({kind}: {kind: ActivityMemberListKind}) {
 	}
 }
 
+function buildMemberActivityLine(activities: Array<UserActivity>): MemberActivityLine | null {
+	const shown = activities.slice(0, MAX_DISPLAY_ACTIVITIES);
+	if (shown.length === 0) {
+		return null;
+	}
+	const line = formatActivityMemberListLine(shown[0]);
+	// [OM] Newest icon first and "oldest" last, so the oldest activity's icon is the one next to its text. Keep activity line for icon to be used in tooltip
+	const icons = shown
+		.slice(0, MAX_ACTIVITY_ICONS)
+		.map((activity, index) => {
+			const ownLine = index === 0 ? line : formatActivityMemberListLine(activity);
+			return {kind: ownLine.kind, label: ownLine.text};
+		})
+		.reverse();
+	return {...line, extraCount: Math.max(0, shown.length - MAX_ACTIVITY_ICONS), icons};
+}
+
 export function useMemberActivityLine({
 	customStatus,
 	enabled = true,
@@ -92,12 +134,11 @@ export function useMemberActivityLine({
 		enabled: shouldFetchCustomStatus,
 	});
 	const resolvedCustomStatus = shouldFetchCustomStatus ? presenceCustomStatus : (customStatus ?? null);
-	const activities = usePresenceActivities({
+	const presenceActivities = usePresenceActivities({
 		userId,
 		enabled: enabled && !hasVisibleCustomStatus(resolvedCustomStatus),
 	});
-	const activity = activities[0] ?? null;
-	return useMemo(() => (activity ? formatActivityMemberListLine(activity) : null), [activity]);
+	return useMemo(() => buildMemberActivityLine(presenceActivities), [presenceActivities]);
 }
 
 export function CompactMemberActivityStatus({className, customStatus, userId}: CompactMemberActivityStatusProps) {
@@ -111,40 +152,37 @@ export function CompactMemberActivityStatus({className, customStatus, userId}: C
 export function CompactActivityLine({className, line}: CompactActivityLineProps) {
 	const {i18n} = useLingui();
 	const containerRef = useRef<HTMLDivElement>(null);
-	const tooltipText = useMemo(() => {
-		switch (line.kind) {
-			case 'listening':
-				return i18n._(LISTENING_TO_ACTIVITY_DESCRIPTOR, {activityName: line.text});
-			case 'watching':
-				return i18n._(WATCHING_ACTIVITY_DESCRIPTOR, {activityName: line.text});
-			case 'competing':
-				return i18n._(COMPETING_IN_ACTIVITY_DESCRIPTOR, {activityName: line.text});
-			default:
-				return i18n._(PLAYING_ACTIVITY_DESCRIPTOR, {activityName: line.text});
-		}
-	}, [i18n, line]);
+	const tooltipText = useMemo(() => activityTooltipText(i18n, line.kind, line.text), [i18n, line]);
 	const isOverflowing = useTextOverflow(containerRef, {content: line.text, measureTextRange: true});
 
-	const content = (
-		<div
-			ref={containerRef}
-			className={clsx(styles.root, className)}
-			data-flx="channel.compact-member-activity-status.content"
-		>
-			<ActivityKindIcon kind={line.kind} />
-			<span className={styles.text} data-flx="channel.compact-member-activity-status.text">
-				{line.text}
-			</span>
-		</div>
+	const newestIcon = line.icons.length > 1 ? line.icons[0] : null;
+	const lineIcons = newestIcon ? line.icons.slice(1) : line.icons;
+	const lineContent = (
+		<span className={styles.lineGroup}>
+			{lineIcons.map((icon, index) => (
+				<ActivityKindIcon key={`${icon.kind}:${index}`} kind={icon.kind} />
+			))}
+			<span className={styles.text}>{line.text}</span>
+			{line.extraCount > 0 && <span className={styles.extraCount}>{`+${line.extraCount}`}</span>}
+		</span>
 	);
 
-	if (tooltipText && isOverflowing) {
-		return (
-			<Tooltip text={tooltipText} data-flx="channel.compact-member-activity-status.tooltip">
-				{content}
-			</Tooltip>
-		);
-	}
-
-	return content;
+	return (
+		<div ref={containerRef} className={clsx(styles.root, className)}>
+			{newestIcon && (
+				<Tooltip text={activityTooltipText(i18n, newestIcon.kind, newestIcon.label)}>
+					<span className={styles.activityIconSlot}>
+						<ActivityKindIcon kind={newestIcon.kind} />
+					</span>
+				</Tooltip>
+			)}
+			{tooltipText && isOverflowing ? (
+				<Tooltip text={tooltipText} data-flx="channel.compact-member-activity-status.tooltip">
+					{lineContent}
+				</Tooltip>
+			) : (
+				lineContent
+			)}
+		</div>
+	);
 }

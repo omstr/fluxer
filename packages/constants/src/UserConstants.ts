@@ -317,6 +317,17 @@ export const ActivityVisibilityLevelsDescriptions: Record<keyof typeof ActivityV
 	NO_ONE: 'Activity only visible to the local user',
 };
 
+export const RpcActivityTypes = {
+	PLAYING: 0,
+	STREAMING: 1,
+	LISTENING: 2,
+	WATCHING: 3,
+	CUSTOM: 4,
+	COMPETING: 5,
+} as const;
+
+export type RpcActivityType = (typeof RpcActivityTypes)[keyof typeof RpcActivityTypes];
+
 export const SMALL_GUILD_MEMBER_THRESHOLD = 200;
 export const VOICE_ACTIVITY_SHARING_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 export const UserNotificationSettings = {

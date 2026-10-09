@@ -4,9 +4,10 @@ import {ExternalLink} from '@app/features/app/components/shared/ExternalLink';
 import {isKeyboardActivationKey} from '@app/features/input/utils/KeyboardUtils';
 import {ActivityCoverImage} from '@app/features/presence/components/ActivityCoverImage';
 import {usePresenceActivities} from '@app/features/presence/hooks/usePresenceActivities';
-import {formatActivityDisplay} from '@app/features/presence/utils/formatActivityDisplay';
+import {type ActivityDisplayLines, formatActivityDisplay} from '@app/features/presence/utils/formatActivityDisplay';
+import {resolveActivityImageUrl} from '@app/features/presence/utils/resolveActivityImageUrl';
+import experimentStyles from '@app/features/user/components/profile/ProfileRichPresence.experiments.module.css';
 import styles from '@app/features/user/components/profile/ProfileRichPresence.module.css';
-import SomethingChudIcon from '@app/media/images/SomethingChudIcon.svg?react';
 import type {UserActivity} from '@fluxer/schema/src/domains/user/UserResponseSchemas';
 import type {I18n} from '@lingui/core';
 import {msg} from '@lingui/core/macro';
@@ -15,13 +16,14 @@ import {Trans} from '@lingui/react/macro';
 import {CaretLeftIcon, CaretRightIcon, GameControllerIcon, HeadphonesIcon, MoonStarsIcon} from '@phosphor-icons/react';
 import {clsx} from 'clsx';
 import type React from 'react';
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 
 interface ProfileRichPresenceProps {
 	userId: string;
 	onOpenProfile?: () => void;
 	listeningSourceMaxLength?: number;
 	showEmptyState?: boolean;
+	expanded?: boolean | undefined;
 }
 type DurationDirectionType = 'elapsed' | 'remaining' | 'total';
 
@@ -46,9 +48,39 @@ const COMPETING_DESCRIPTOR = msg({
 	comment: 'Rich presence header when competing in a game.',
 });
 const PLAYING_DESCRIPTOR = msg({
-	message: 'Playing',
+	message: 'Playing {}',
 	comment: 'Rich presence header on user profile.',
 });
+
+type PresenceCardExperiment = 'none' | 'glassy' | 'wash' | 'glassy-wash';
+
+/**
+ * [OM]
+ * ProfileRichPresence.experiments.module.css, experimentStyles import washLayer div, 3 functions below
+ */
+const PRESENCE_CARD_EXPERIMENT: PresenceCardExperiment = 'none';
+
+function experimentClassNameFor(experiment: PresenceCardExperiment): string | undefined {
+	switch (experiment) {
+		case 'glassy':
+			return experimentStyles.glassy;
+		case 'wash':
+			return experimentStyles.wash;
+		case 'glassy-wash':
+			return clsx(experimentStyles.glassy, experimentStyles.wash);
+		default:
+			return undefined;
+	}
+}
+
+function experimentWantsImageWash(experiment: PresenceCardExperiment): boolean {
+	return experiment === 'wash' || experiment === 'glassy-wash';
+}
+
+function resolveActivityWashUrl(activity: UserActivity): string | null {
+	const primaryImage = activity.assets?.large_image ?? activity.assets?.small_image;
+	return resolveActivityImageUrl(primaryImage, activity.application_id);
+}
 
 function trimListeningSource(source: string, maxLength: number): string {
 	if (source.length <= maxLength) return source;
@@ -80,12 +112,14 @@ function getActivityHeader(
 function ProfilePresenceEmptyState() {
 	return (
 		<div className={styles.emptyState}>
-			<MoonStarsIcon className={styles.emptyStateIcon} size={48} weight="light" aria-hidden style={{opacity: 0.7}}/>
+			<MoonStarsIcon className={styles.emptyStateIcon} size={48} weight="light" aria-hidden style={{opacity: 0.7}} />
 			<span className={styles.emptyStateTitle}>
 				<Trans>All quiet for now</Trans>
 			</span>
 			<span className={styles.emptyStateBody}>
-				<Trans>When something<span style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', right:80, bottom:50, flexDirection: 'row', gap: 0.5, opacity: 0.15, zIndex: -1, pointerEvents: 'none'}}><SomethingChudIcon style={{width: 48, height: 36, zIndex: -1}} aria-hidden/></span> happens, it'll show up here.</Trans>
+				<Trans>
+					When something happens, it'll show up here.
+				</Trans>
 			</span>
 		</div>
 	);
@@ -190,62 +224,27 @@ function ActivityLine({className, href, children}: {className: string; href?: st
 	);
 }
 
-export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({
-	userId,
-	onOpenProfile,
-	listeningSourceMaxLength = LISTENING_SOURCE_MAX_LENGTH,
-	showEmptyState = false,
-}) => {
+interface ProfileRichPresenceContentProps {
+	activity: UserActivity;
+	display: ActivityDisplayLines;
+	listeningSourceMaxLength: number;
+	headerActions?: React.ReactNode;
+}
+
+function ProfileRichPresenceContent({
+	activity,
+	display,
+	listeningSourceMaxLength,
+	headerActions,
+}: ProfileRichPresenceContentProps) {
 	const {i18n} = useLingui();
-	const activities = usePresenceActivities({userId});
-	const [activityIndex, setActivityIndex] = useState(0);
-	useEffect(() => {
-		setActivityIndex((currentIndex) => Math.min(currentIndex, Math.max(activities.length - 1, 0)));
-	}, [activities.length]);
-	const hasMultipleActivities = activities.length > 1;
-	const activity = useMemo(() => activities[activityIndex] ?? null, [activities, activityIndex]);
-	const display = useMemo(() => (activity ? formatActivityDisplay(activity) : null), [activity]);
-	if (activities.length === 0) {
-		return showEmptyState ? <ProfilePresenceEmptyState /> : null;
-	}
-	if (!activity || !display) return null;
-	const cardContent = (
+	return (
 		<>
 			<div className={styles.headerRow}>
 				<span className={styles.activityLabel}>
 					{getActivityHeader(activity, display.listeningSource, i18n, listeningSourceMaxLength)}
 				</span>
-				{hasMultipleActivities ? (
-					<div className={styles.activityCarouselControls}>
-						<button
-							type="button"
-							className={styles.activityCarouselButton}
-							onClick={(event) => {
-								event.stopPropagation();
-								setActivityIndex((currentIndex) => Math.max(currentIndex - 1, 0));
-							}}
-							disabled={activityIndex === 0}
-							aria-label="Show previous activity"
-						>
-							<CaretLeftIcon size={14} weight="bold" aria-hidden />
-						</button>
-						<span className={styles.activityCarouselCount}>
-							{activityIndex + 1}/{activities.length}
-						</span>
-						<button
-							type="button"
-							className={styles.activityCarouselButton}
-							onClick={(event) => {
-								event.stopPropagation();
-								setActivityIndex((currentIndex) => Math.min(currentIndex + 1, activities.length - 1));
-							}}
-							disabled={activityIndex >= activities.length - 1}
-							aria-label="Show next activity"
-						>
-							<CaretRightIcon size={14} weight="bold" aria-hidden />
-						</button>
-					</div>
-				) : null}
+				{headerActions}
 			</div>
 			<div className={styles.activityRow}>
 				<div className={styles.activityArt}>
@@ -257,7 +256,8 @@ export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({
 				</div>
 				<div className={styles.activityBody}>
 					<ActivityLine className={styles.activityPrimary} href={activity.details_url}>
-						{display.primary } {/* [OM] return to this block. May require displaying seperate information depending on the type of activity*/}
+						{display.primary}
+						{/* [OM] return to this block. May require displaying seperate information depending on the type of activity*/}
 					</ActivityLine>
 					{display.secondary ? (
 						<ActivityLine className={styles.activitySecondary} href={activity.state_url}>
@@ -266,11 +266,11 @@ export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({
 					) : null}
 					<ActivityProgress start={activity.timestamps?.start} end={activity.timestamps?.end} />
 					<ActivityTimer start={activity.timestamps?.start} end={activity.timestamps?.end} />
-					{activity?.state && activity.state !== display.primary || activity.state !== display.secondary ? (
+					{/* {activity?.state ? (
 						<ActivityLine className={styles.activitySecondary} href={activity.state}>
 							{activity.state}
 						</ActivityLine>
-					) : null}
+					) : null} */}
 					{activity.buttons?.length
 						? null
 						: // ( [OM] prefer icons if we can somewhere.
@@ -291,16 +291,50 @@ export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({
 			</div>
 		</>
 	);
+}
+
+interface ProfileRichPresenceCardProps {
+	activity: UserActivity;
+	onOpenProfile?: (() => void) | undefined;
+	children: React.ReactNode;
+}
+
+function ProfileRichPresenceCard({activity, onOpenProfile, children}: ProfileRichPresenceCardProps) {
+	const cardRef = useRef<HTMLDivElement | null>(null);
+	const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
+		const node = cardRef.current;
+		if (node == null) return;
+		const rect = node.getBoundingClientRect();
+		node.style.setProperty('--spotlight-x', `${event.clientX - rect.left}px`);
+		node.style.setProperty('--spotlight-y', `${event.clientY - rect.top}px`);
+	};
+	const washUrl = experimentWantsImageWash(PRESENCE_CARD_EXPERIMENT) ? resolveActivityWashUrl(activity) : null;
+	const washStyle =
+		washUrl == null ? undefined : ({'--presence-wash-image': `url("${washUrl}")`} as React.CSSProperties);
+	const experimentClassName = experimentClassNameFor(PRESENCE_CARD_EXPERIMENT);
+	const cardBody = (
+		<>
+			{washStyle ? <div className={experimentStyles.washLayer} style={washStyle} aria-hidden /> : null}
+			<div className={styles.spotlight} aria-hidden />
+			{children}
+		</>
+	);
 	if (!onOpenProfile) {
 		return (
-			<div className={styles.activityCard} data-flx="user.profile.profile-rich-presence">
-				{cardContent}
+			<div
+				ref={cardRef}
+				className={clsx(styles.activityCard, experimentClassName)}
+				onPointerMove={handlePointerMove}
+			>
+				{cardBody}
 			</div>
 		);
 	}
 	return (
 		<div
-			className={clsx(styles.activityCard, styles.activityCardInteractive)}
+			ref={cardRef}
+			className={clsx(styles.activityCard, styles.activityCardInteractive, experimentClassName)}
+			onPointerMove={handlePointerMove}
 			onClick={onOpenProfile}
 			onKeyDown={(event) => {
 				if (!isKeyboardActivationKey(event.key)) return;
@@ -310,7 +344,88 @@ export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({
 			role="button"
 			tabIndex={0}
 		>
-			{cardContent}
+			{cardBody}
 		</div>
+	);
+}
+
+export const ProfileRichPresence: React.FC<ProfileRichPresenceProps> = ({
+	userId,
+	onOpenProfile,
+	listeningSourceMaxLength = LISTENING_SOURCE_MAX_LENGTH,
+	showEmptyState = false,
+	expanded = false,
+}) => {
+	const activities = usePresenceActivities({userId});
+	const [activityIndex, setActivityIndex] = useState(0);
+	useEffect(() => {
+		setActivityIndex((currentIndex) => Math.min(currentIndex, Math.max(activities.length - 1, 0)));
+	}, [activities.length]);
+	const activityEntries = useMemo(
+		() => activities.map((item) => ({activity: item, display: formatActivityDisplay(item)})),
+		[activities],
+	);
+	const activeEntry = activityEntries[activityIndex] ?? null;
+	if (activities.length === 0) {
+		return showEmptyState ? <ProfilePresenceEmptyState /> : null;
+	}
+	if (expanded) {
+		return (
+			<div className={styles.activityStack}>
+				{activityEntries.map((entry, index) => (
+					<ProfileRichPresenceCard
+						key={`${entry.activity.application_id ?? entry.activity.name}:${index}`}
+						activity={entry.activity}
+						onOpenProfile={onOpenProfile}
+					>
+						<ProfileRichPresenceContent
+							activity={entry.activity}
+							display={entry.display}
+							listeningSourceMaxLength={listeningSourceMaxLength}
+						/>
+					</ProfileRichPresenceCard>
+				))}
+			</div>
+		);
+	}
+	if (activeEntry == null) return null;
+	const hasMultipleActivities = activities.length > 1;
+	const carouselControls = hasMultipleActivities ? (
+		<div className={styles.activityCarouselControls}>
+			<button
+				type="button"
+				className={styles.activityCarouselButton}
+				onClick={(event) => {
+					event.stopPropagation();
+					setActivityIndex((currentIndex) => Math.max(currentIndex - 1, 0));
+				}}
+				disabled={activityIndex === 0}
+				aria-label="Show previous activity"
+			>
+				<CaretLeftIcon size={11} weight="bold" aria-hidden />
+			</button>
+			<button
+				type="button"
+				className={styles.activityCarouselButton}
+				onClick={(event) => {
+					event.stopPropagation();
+					setActivityIndex((currentIndex) => Math.min(currentIndex + 1, activities.length - 1));
+				}}
+				disabled={activityIndex >= activities.length - 1}
+				aria-label="Show next activity"
+			>
+				<CaretRightIcon size={11} weight="bold" aria-hidden />
+			</button>
+		</div>
+	) : null;
+	return (
+		<ProfileRichPresenceCard activity={activeEntry.activity} onOpenProfile={onOpenProfile}>
+			<ProfileRichPresenceContent
+				activity={activeEntry.activity}
+				display={activeEntry.display}
+				listeningSourceMaxLength={listeningSourceMaxLength}
+				headerActions={carouselControls}
+			/>
+		</ProfileRichPresenceCard>
 	);
 };

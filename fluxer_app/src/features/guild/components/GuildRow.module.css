@@ -1,0 +1,22 @@
+.row {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
+	width: 100%;
+	min-width: 0;
+}
+
+.name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.memberCount {
+	flex-shrink: 0;
+	font-size: 0.75rem;
+	color: var(--text-tertiary);
+	white-space: nowrap;
+}

@@ -385,7 +385,10 @@ export const FriendListItem: React.FC<FriendListItemProps> = observer((props) =>
 								data-flx="channel.friends.friend-list-item.friend-subtext"
 							/>
 						) : activityLine ? (
-							<CompactActivityLine className={styles.friendSubtext} line={activityLine} />
+							<CompactActivityLine
+								className={styles.friendSubtext}
+								line={activityLine}
+							/>
 						) : (
 							<span
 								className={clsx(styles.friendSubtext, getStatusClassName())}

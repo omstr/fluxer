@@ -430,7 +430,10 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 											animateOnParentHover
 											data-flx="channel.direct-message.dm-list-item.dm-item-custom-status"
 										/>
-										<CompactMemberActivityStatus userId={recipient.id} className={styles.dmItemActivity} />
+										<CompactMemberActivityStatus
+											userId={recipient.id}
+											className={styles.dmItemActivity}
+										/>
 									</>
 								)}
 								{isGroupDM && (
@@ -597,7 +600,10 @@ const ResolvedDMListItem = observer(function ResolvedDMListItem({
 										animateOnParentHover
 										data-flx="channel.direct-message.dm-list-item.dm-item-custom-status--2"
 									/>
-									<CompactMemberActivityStatus userId={recipient.id} className={styles.dmItemActivity} />
+									<CompactMemberActivityStatus
+										userId={recipient.id}
+										className={styles.dmItemActivity}
+									/>
 								</>
 							)}
 							{isGroupDM && (

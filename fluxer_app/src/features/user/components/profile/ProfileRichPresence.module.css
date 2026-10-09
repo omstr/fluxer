@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 
 .activityCard {
+	position: relative;
+	isolation: isolate;
+	overflow: hidden;
 	display: flex;
 	flex-direction: column;
 	gap: 0.75rem;
@@ -8,19 +11,77 @@
 	align-self: stretch;
 	margin-top: 1rem;
 	padding: 0.75rem 0.875rem;
-	border-radius: var(--radius-md, 0.375rem);
-	background-color: var(--background-secondary);
-	border: 0.0625rem solid var(--border-color, rgb(255 255 255 / 0.04));
-	box-shadow: 0 0.375rem 1.125rem rgb(0 0 0 / 0.08);
+	border-radius: var(--radius-sm, 0.25rem);
+	background-color: color-mix(in srgb, var(--background-secondary) 60%, transparent);
+	border: 0.0625rem solid rgb(255 255 255 / 0.03);
+	box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.04);
+	transition:
+		background-color 160ms ease,
+		border-color 160ms ease;
+}
+
+.spotlight {
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 220ms ease;
+	background: radial-gradient(
+		circle var(--spotlight-radius, 5.5rem) at var(--spotlight-x, 50%) var(--spotlight-y, 50%),
+		rgb(255 255 255 / 0.1) 0%,
+		rgb(255 255 255 / 0.035) 60%,
+		transparent 100%
+	);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+	.spotlight {
+		-webkit-backdrop-filter: blur(1.25rem) saturate(1.2);
+		backdrop-filter: blur(1.25rem) saturate(1.2);
+		-webkit-mask-image: radial-gradient(
+			circle calc(var(--spotlight-radius, 5.5rem) * 1.5) at var(--spotlight-x, 50%) var(--spotlight-y, 50%),
+			black 0%,
+			rgb(0 0 0 / 0.35) 50%,
+			transparent 100%
+		);
+		mask-image: radial-gradient(
+			circle calc(var(--spotlight-radius, 3.5rem) * 1.5) at var(--spotlight-x, 50%) var(--spotlight-y, 50%),
+			black 0%,
+			rgb(0 0 0 / 0.35) 50%,
+			transparent 100%
+		);
+	}
+}
+
+:global(:where(html.window-focused, html.unfocused-fully-interactive):not(.window-focus-activation-guard))
+	.activityCard:is(:hover, :focus-within)
+	.spotlight {
+	opacity: 1;
+}
+
+.activityStack {
+	display: flex;
+	flex-direction: column;
+	gap: 0.625rem;
+}
+
+.activityStack .activityCard {
+	margin-top: 0;
+}
+
+.activityStack .activityRow {
+	gap: 1.25rem;
 }
 
 .activityCardInteractive {
 	cursor: pointer;
 }
 
-.activityCardInteractive:hover,
-.activityCardInteractive:focus-visible {
-	background-color: var(--background-modifier-hover);
+:global(:where(html.window-focused, html.unfocused-fully-interactive):not(.window-focus-activation-guard))
+	.activityCardInteractive:focus-visible {
+	outline: 0.125rem solid var(--background-modifier-accent-focus, rgb(255 255 255 / 0.25));
+	outline-offset: 0.125rem;
 }
 
 .emptyState {
@@ -57,11 +118,11 @@
 
 .activityLabel {
 	max-height: 5rem;
-	font-size: 0.75rem;
-	font-weight: 600;
+	font-size: 0.8rem;
+	font-weight: 400;
 	line-height: 1.3;
 	color: var(--text-primary);
-	text-transform: uppercase;
+	text-transform: none;
 	text-overflow: ellipsis;
 	letter-spacing: 0.02em;
 }
@@ -69,7 +130,7 @@
 .activityCarouselControls {
 	display: inline-flex;
 	align-items: center;
-	gap: 0.25rem;
+	gap: 0.1rem;
 	flex-shrink: 0;
 }
 
@@ -114,7 +175,7 @@
 .activityRow {
 	display: flex;
 	align-items: flex-start;
-	gap: 0.75rem;
+	gap: 1rem;
 	min-width: 0;
 }
 

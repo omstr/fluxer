@@ -19,6 +19,26 @@
 	color: var(--status-online);
 }
 
+.activityIconSlot {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+.lineGroup {
+	display: flex;
+	align-items: center;
+	gap: 0.3125rem;
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+.extraCount {
+	flex-shrink: 0;
+	color: color-mix(in srgb, currentcolor 70%, transparent);
+	font-variant-numeric: tabular-nums;
+}
+
 .text {
 	overflow: hidden;
 	text-overflow: ellipsis;
