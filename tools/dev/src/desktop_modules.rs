@@ -94,6 +94,12 @@ pub fn pkgs_root() -> PathBuf {
     }
 }
 
+fn docker_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    s.replace('\\', "/")
+}
+
 pub fn host_module_platform() -> Result<&'static str> {
     match env::consts::OS {
         "macos" => Ok("darwin"),
@@ -515,17 +521,17 @@ pub fn ensure_pkgs_server() -> Result<()> {
     }
     let config = config
         .canonicalize()
-        .with_context(|| format!("failed to resolve {}", config.display()))?;
+        .with_context(|| format!("failed to resolve {}", docker_path(&config)))?;
     if container_matches(&root, &config)? {
         println!(
             "The local package server {PKGS_CONTAINER} serves {} on {DEVELOPMENT_PACKAGE_ORIGIN}",
-            root.display()
+            docker_path(&root)
         );
         return Ok(());
     }
     let _ = docker_output(&["rm", "-f", PKGS_CONTAINER]);
-    let root_mount = format!("{}:{PKGS_CONTAINER_ROOT}:ro", root.display());
-    let config_mount = format!("{}:{PKGS_CONTAINER_CONFIG}:ro", config.display());
+    let root_mount = format!("{}:{PKGS_CONTAINER_ROOT}:ro", docker_path(&root));
+    let config_mount = format!("{}:{PKGS_CONTAINER_CONFIG}:ro", docker_path(&config));
     let output = docker_output(&[
         "run",
         "--detach",
