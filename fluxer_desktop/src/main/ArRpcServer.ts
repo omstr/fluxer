@@ -3,7 +3,6 @@
 import {EventEmitter} from 'node:events';
 import {unlinkSync} from 'node:fs';
 import {createConnection, createServer, type Server} from 'node:net';
-import {join} from 'node:path';
 import {resolveByClientId} from '@electron/main/DetectableApplications';
 import {
 	ACTIVITY_FLAG_INSTANCE,
@@ -20,7 +19,7 @@ import {
 import type {ExtendedSocket, RPCMessage, RpcActivityPayload, SetActivityArgs} from '@electron/main/rpc/RpcTypes';
 import {
 	encodeIpcMessage,
-	getUnixSocketBaseDir,
+	getIpcSocketPath,
 	normalizeTimestamps,
 	resolveRpcActivityName,
 } from '@electron/main/rpc/RpcUtils';
@@ -259,9 +258,15 @@ function attachReadable(socket: ExtendedSocket): void {
 	});
 }
 
+function removeStaleSocketFile(path: string): void {
+	try {
+		unlinkSync(path);
+	} catch {}
+}
+
 async function getAvailableSocketPath(tries = 0): Promise<string> {
 	if (tries > IPC_MAX_RETRIES) throw new Error('ran out of IPC socket tries');
-	const candidate = `${join(getUnixSocketBaseDir(), IPC_SOCKET_NAME)}-${tries}`;
+	const candidate = getIpcSocketPath(tries, IPC_SOCKET_NAME);
 	const available = await new Promise<boolean>((resolve) => {
 		const probe = createConnection(candidate);
 		probe.once('connect', () => {
@@ -272,17 +277,15 @@ async function getAvailableSocketPath(tries = 0): Promise<string> {
 		probe.once('error', () => resolve(true));
 	});
 	if (available) {
-		try {
-			unlinkSync(candidate);
-		} catch {}
+		removeStaleSocketFile(candidate);
 		return candidate;
 	}
 	return getAvailableSocketPath(tries + 1);
 }
 
 export async function startArRpcServer(): Promise<void> {
-	if (process.platform !== 'linux') {
-		log.info('[RPC] ArRpcServer skipped (linux-only for now)');
+	if (process.platform !== 'linux' && process.platform !== 'win32') {
+		log.info('[RPC] ArRpcServer skipped (linux and windows only for now)');
 		return;
 	}
 	if (ipcServer) return;
@@ -310,9 +313,7 @@ export async function stopArRpcServer(): Promise<void> {
 	socketPath = null;
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 	if (path) {
-		try {
-			unlinkSync(path);
-		} catch {}
+		removeStaleSocketFile(path);
 	}
 }
 

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import {join} from 'node:path';
+
 const TIMESTAMP_SECONDS_MAX = 10_000_000_000;
 const TIMESTAMP_MILLISECONDS_MAX = 10_000_000_000_000;
 
@@ -76,4 +78,16 @@ export function encodeIpcMessage(type: number, data: unknown): Buffer {
 
 export function getUnixSocketBaseDir(): string {
 	return process.env.XDG_RUNTIME_DIR ?? process.env.TMPDIR ?? process.env.TMP ?? process.env.TEMP ?? '/tmp';
+}
+
+// \\.\pipe\discord-ipc-N on Windows, otherwise a unix socket in /tmp or /run/user/1000
+export function getIpcSocketPath(
+	index: number,
+	socketName: string,
+	platform: NodeJS.Platform = process.platform,
+): string {
+	if (platform === 'win32') {
+		return `\\\\.\\pipe\\${socketName}-${index}`;
+	}
+	return `${join(getUnixSocketBaseDir(), socketName)}-${index}`;
 }
