@@ -259,6 +259,9 @@ function attachReadable(socket: ExtendedSocket): void {
 }
 
 function removeStaleSocketFile(path: string): void {
+	if (process.platform === 'win32') {
+		return;
+	}
 	try {
 		unlinkSync(path);
 	} catch {}
