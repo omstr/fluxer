@@ -191,7 +191,7 @@ fn install_gateway_nif(artifact_path: &Path, output_path: &Path) -> Result<()> {
             output_path.display()
         )
     })?;
-    fs::copy(artifact_path, staged_artifact.path()).with_context(|| {
+    crate::fs_utils::copy_file(artifact_path, staged_artifact.path()).with_context(|| {
         format!(
             "Failed to stage gateway NIF {} for {}",
             artifact_path.display(),

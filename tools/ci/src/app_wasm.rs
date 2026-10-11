@@ -232,16 +232,16 @@ fn build_libfluxcore_wasm(app_dir: &Path) -> Result<()> {
                 .with_context(|| format!("Failed to read {}", bindgen_dts_path.display()))?,
         )?,
     )?;
-    fs::copy(&bindgen_wasm_path, &wasm_path).with_context(|| {
+    crate::fs_utils::copy_file(&bindgen_wasm_path, &wasm_path).with_context(|| {
         format!(
             "Failed to copy {} to {}",
             bindgen_wasm_path.display(),
             wasm_path.display()
         )
     })?;
-    fs::copy(
+    crate::fs_utils::copy_file(
         &bindgen_wasm_dts_path,
-        out_dir.join("libfluxcore_bg.wasm.d.ts"),
+        &out_dir.join("libfluxcore_bg.wasm.d.ts"),
     )
     .with_context(|| format!("Failed to copy {}", bindgen_wasm_dts_path.display()))?;
 
@@ -424,18 +424,18 @@ fn build_libfluxwebp_wasm(app_dir: &Path) -> Result<()> {
             .context("Failed to read libfluxwebp.d.ts")?,
     )?;
     for installed in ["libfluxwebp_bg.wasm.d.ts", "libfluxwebp_simd_bg.wasm.d.ts"] {
-        fs::copy(
-            reference_dir.join("libfluxwebp_bg.wasm.d.ts"),
-            out_dir.join(installed),
+        crate::fs_utils::copy_file(
+            &reference_dir.join("libfluxwebp_bg.wasm.d.ts"),
+            &out_dir.join(installed),
         )
-        .with_context(|| format!("Failed to install {installed}"))?;
+        .with_context(|| format!("failed to copy {installed}"))?;
     }
 
     for (variant, dir) in &bindgen_dirs {
         let installed = out_dir.join(variant.installed_wasm_name());
         let previous = file_size(&installed)?;
-        fs::copy(dir.join("libfluxwebp_bg.wasm"), &installed)
-            .with_context(|| format!("Failed to install {}", installed.display()))?;
+        crate::fs_utils::copy_file(&dir.join("libfluxwebp_bg.wasm"), &installed)
+            .with_context(|| format!("failed to copy {}", installed.display()))?;
         let size = check_wasm_size_budget(&installed, variant.size_budget())?;
         let size_comparison = match previous {
             Some(previous) => format!("{} -> {}", format_bytes(previous), format_bytes(size)),

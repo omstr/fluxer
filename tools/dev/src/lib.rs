@@ -7,6 +7,7 @@ pub mod desktop_modules;
 pub mod dev;
 pub mod disclaim;
 pub mod env;
+pub mod fs_utils;
 pub mod gateway;
 pub mod manifest;
 pub mod media_proxy;

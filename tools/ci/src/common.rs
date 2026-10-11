@@ -1028,7 +1028,7 @@ pub(crate) fn copy_dir_contents(source: &Path, dest: &Path) -> Result<()> {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create {}", parent.display()))?;
         }
-        fs::copy(&file, &target).with_context(|| {
+        crate::fs_utils::copy_file(&file, &target).with_context(|| {
             format!("Failed to copy {} to {}", file.display(), target.display())
         })?;
     }

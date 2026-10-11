@@ -10,6 +10,7 @@ mod common;
 mod desktop;
 mod desktop_native;
 mod functions;
+mod fs_utils;
 mod gateway;
 mod image_set;
 mod release;

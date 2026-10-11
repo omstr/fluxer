@@ -255,7 +255,7 @@ pub(crate) fn copy_tree(
         if entry.file_type()?.is_dir() {
             copy_tree(&path, &target, skip)?;
         } else {
-            fs::copy(&path, &target).with_context(|| {
+            crate::fs_utils::copy_file(&path, &target).with_context(|| {
                 format!("failed to copy {} to {}", path.display(), target.display())
             })?;
         }

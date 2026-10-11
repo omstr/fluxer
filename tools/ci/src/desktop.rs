@@ -625,7 +625,7 @@ fn ensure_python3_windows_step() -> Result<()> {
         .ok_or_else(|| anyhow!("python executable has no parent: {}", python.display()))?
         .join("python3.exe");
     if !target.exists() {
-        fs::copy(&python, &target).with_context(|| {
+        crate::fs_utils::copy_file(&python, &target).with_context(|| {
             format!(
                 "Failed to copy {} to {}",
                 python.display(),
@@ -2059,7 +2059,7 @@ fn split_modules_step() -> Result<()> {
                 fs::create_dir_all(parent)
                     .with_context(|| format!("Failed to create {}", parent.display()))?;
             }
-            fs::copy(source, &target).with_context(|| {
+            crate::fs_utils::copy_file(source, &target).with_context(|| {
                 format!(
                     "Failed to copy {} to {}",
                     source.display(),
@@ -2210,7 +2210,7 @@ fn write_desktop_dictionary_modules(
         for name in DESKTOP_DICTIONARY_FILE_NAMES {
             let source = entry.join(name);
             let target = files_dir.join(name);
-            fs::copy(&source, &target).with_context(|| {
+            crate::fs_utils::copy_file(&source, &target).with_context(|| {
                 format!(
                     "Failed to copy {} to {}",
                     source.display(),
@@ -4965,7 +4965,7 @@ impl<'a> DesktopReleaseAssetBuilder<'a> {
             );
         } else {
             let destination = self.release_assets.join(&release_asset);
-            let copied = fs::copy(source, &destination).with_context(|| {
+            let copied = crate::fs_utils::copy_file(source, &destination).with_context(|| {
                 format!(
                     "Failed to copy desktop release asset {} to {}",
                     source.display(),
@@ -5367,7 +5367,7 @@ fn stage_desktop_module_packages(
         ] {
             let source = module.directory.join(name);
             let target = dest.join(name);
-            fs::copy(&source, &target).with_context(|| {
+            crate::fs_utils::copy_file(&source, &target).with_context(|| {
                 format!(
                     "Failed to copy {} to {}",
                     source.display(),
@@ -6004,7 +6004,7 @@ where
         }
         let name = file_name_string(&path)?;
         if predicate(&name) {
-            fs::copy(&path, dest.join(&name))
+            crate::fs_utils::copy_file(&path, &dest.join(&name))
                 .with_context(|| format!("Failed to copy {}", path.display()))?;
         }
     }

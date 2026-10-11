@@ -402,7 +402,7 @@ fn build_rust_node_addon_for_arch(
         "expected {} to exist after cargo build",
         source.display()
     );
-    fs::copy(&source, &out_file).with_context(|| {
+    crate::fs_utils::copy_file(&source, &out_file).with_context(|| {
         format!(
             "Failed to copy {} to {}",
             source.display(),
@@ -606,7 +606,7 @@ fn copy_webauthn_linux_shared_libraries(native_path: &Path, root: &Path) -> Resu
         {
             continue;
         }
-        fs::copy(&dependency.source_path, &target_path).with_context(|| {
+        crate::fs_utils::copy_file(&dependency.source_path, &target_path).with_context(|| {
             format!(
                 "Failed to copy {} to {}",
                 dependency.source_path.display(),

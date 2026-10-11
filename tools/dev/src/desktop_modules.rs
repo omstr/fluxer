@@ -288,7 +288,7 @@ fn copy_package(source: &Path, destination: &Path) -> Result<()> {
         .with_context(|| format!("{} has no parent directory", destination.display()))?;
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     let next = parent.join(".package.br.next");
-    fs::copy(source, &next)
+    crate::fs_utils::copy_file(source, &next)
         .with_context(|| format!("failed to copy {} to {}", source.display(), next.display()))?;
     fs::rename(&next, destination)
         .with_context(|| format!("failed to move {} into place", destination.display()))
